@@ -49,22 +49,26 @@ class LATTICE:
         self.e_k = None
         self.nk = None
 
-    def get_k_mesh(self, nk):
+    def get_k_mesh(self, nk, center=False):
 
         self.nk = nk
 
         nk_tuple = (nk,) * self.dim + (1,) * (3 - self.dim)
 
         k_mesh = self.H_r.get_kmesh(nk_tuple)
+
         k_arr = np.array([k.value for k in k_mesh])
+
+        if center:
+            k_arr = k_arr - np.pi
 
         return k_mesh, k_arr
 
-    def get_e_k(self, nk):
+    def get_e_k(self, nk, center=False):
 
         self.nk = nk
         
-        k_mesh, _ = self.get_k_mesh(nk)
+        k_mesh, _ = self.get_k_mesh(nk, center)
 
         self.e_k = self.H_r.fourier(k_mesh)
     
