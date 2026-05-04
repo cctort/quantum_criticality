@@ -219,7 +219,7 @@ def cexp(z):
 def lindhard(mu, beta, e_k, e_kq, S_k, S_kq):
 
     Nk = len(e_k)
-    chi0_sum = 0.0 + 0.0j
+    chi0_sum = 0.0
 
     for k in range(Nk):
         
@@ -248,9 +248,9 @@ def lindhard(mu, beta, e_k, e_kq, S_k, S_kq):
         de = (e_k_eff - e_kq_eff) - 1j*(Gamma_k - Gamma_kq)
 
         if abs(de) < 1e-8:
-            chi0 = -beta * nF_k * (1.0 - nF_k)
+            chi0 = - beta * nF_k * (1.0 - nF_k)
         else:
-            chi0 = -(nF_k - nF_kq) / de
+            chi0 = - (nF_k - nF_kq) / de
 
         chi0_sum += chi0
 
@@ -381,57 +381,123 @@ def get_min_invchi0(lattice, mu, beta, q_path=None, method='lindhard', S_iwk=Non
     return best_q, invchi0_min
 
 
+import numpy as np
+from numba import njit
+from scipy.optimize import brentq
+
+
+# ============================================================
+# JIT: full Matsubara density (slow case, but compiled)
+# ============================================================
 @njit
-def _compute_n(eps, S_iwk, mu, beta):
+def _density_iw(eps, S_iwk, mu, beta):
     n_iw, Nk = S_iwk.shape
     n_tot = 0.0
+
     for k in range(Nk):
+        ek = eps[k]
+        xi_k = ek - mu
+
         g_sum = 0.0
         g0_sum = 0.0
-        xi_k = eps[k] - mu  # bare dispersion shifted by mu
+
         for n in range(n_iw):
-            iw = (2*n + 1) * np.pi / beta
-            # full G
-            denom_r = -eps[k] + mu - S_iwk[n, k].real
-            denom_i = iw - S_iwk[n, k].imag
-            g_sum += denom_r / (denom_r**2 + denom_i**2)
-            # bare G0 = 1/(iw + mu - eps_k), its real part = (mu - eps_k)/(w^2 + xi_k^2)
-            g0_sum += (-xi_k) / (iw**2 + xi_k**2)
-        # tail correction: add back the bare sum analytically
-        # sum_{n} Re[G0] = beta/2 * nF(xi_k) - 1/2  (the -1/2 cancels the +1 below)
-        nF0 = 1.0 / (np.exp(min(max(beta * xi_k, -500.0), 500.0)) + 1.0)
-        tail_analytic = beta/2.0 * nF0 - 0.5
-        g_corrected = g_sum - g0_sum + tail_analytic
-        n_tot += 2.0/beta * 2.0 * g_corrected + 1.0
+            w = (2*n + 1) * np.pi / beta
+            Sigma = S_iwk[n, k]
+
+            denom_r = -ek + mu - Sigma.real
+            denom_i = w - Sigma.imag
+            g_sum += denom_r / (denom_r*denom_r + denom_i*denom_i)
+
+            g0_sum += (-xi_k) / (w*w + xi_k*xi_k)
+
+        # tail correction
+        x = beta * xi_k
+        if x > 500.0:
+            nF = 0.0
+        elif x < -500.0:
+            nF = 1.0
+        else:
+            nF = 1.0 / (np.exp(x) + 1.0)
+
+        tail = beta/2.0 * nF - 0.5
+
+        g_corr = g_sum - g0_sum + tail
+        n_tot += 2.0/beta * 2.0 * g_corr + 1.0
+
     return n_tot / Nk
 
-def get_mu(e_k, n_goal, beta, dim=None, S_iwk=None):
+
+# ============================================================
+# fast density: frequency-independent Σ
+# ============================================================
+def _density_static(eps, Phi, Gamma, mu, beta):
+    x  = eps + Phi - mu
+    xr = np.clip(beta * x, -500, 500)
+    xi = beta * Gamma
+
+    cos_xi = np.cos(xi)
+
+    ex  = np.exp(xr)
+    emx = np.exp(-xr)
+
+    # stable form (no exp^2)
+    nF_real = (cos_xi + emx) / (ex + 2*cos_xi + emx)
+
+    return np.mean(2.0 * nF_real)
+
+
+# ============================================================
+# main function
+# ============================================================
+def get_mu(e_k, n_goal, beta, S_iwk=None, dim=None):
+
     eps = e_k.data[:, 0, 0].real.flatten()
-    S_iwk, n_iw, k_dep = get_iwk_arr(S_iwk, Nk=len(eps), dim=dim)
+    S_iwk, n_iw, _ = get_iwk_arr(S_iwk, Nk=len(eps), dim=dim)
 
-    if S_iwk is None or not k_dep and n_iw == 1:
-        # frequency-independent: use closed form Re[nF(xi + iGamma)]
-        Phi   =  S_iwk[0].real
-        Gamma = S_iwk[0].imag  # Gamma > 0
-        def get_n(mu):
-            xr = beta * (eps + Phi - mu)
-            xi = beta * Gamma
-            # Re[nF(xr + i*xi)] = Re[1/(exp(xr+i*xi)+1)]
-            # = (exp(xr)*cos(xi) + 1) / (exp(2*xr) + 2*exp(xr)*cos(xi) + 1)  for finite xr
-            xr_clip = np.clip(xr, -500, 500)
-            ex = np.exp(xr_clip)
-            cos_xi = np.cos(xi)
-            nF_real = (ex * cos_xi + 1.0) / (ex**2 + 2*ex*cos_xi + 1.0)
-            # handle large xr limits explicitly
-            nF_real = np.where(xr > 500, 0.0, nF_real)
-            nF_real = np.where(xr < -500, 1.0, nF_real)
-            return np.mean(2.0 * nF_real) - n_goal
+    # detect frequency independence
+    freq_indep = np.allclose(S_iwk, S_iwk[0:1, :])
+
+    if freq_indep:
+        Sigma = S_iwk[0]
+        Phi   = Sigma.real
+        Gamma = Sigma.imag
+
+        def density(mu):
+            return _density_static(eps, Phi, Gamma, mu, beta)
+
     else:
-        # general frequency-dependent case: explicit Matsubara sum
-        def get_n(mu):
-            return _compute_n(eps, S_iwk, mu, beta) - n_goal
+        def density(mu):
+            return _density_iw(eps, S_iwk, mu, beta)
 
-    return brentq(get_n, eps.min() - 10, eps.max() + 10)
+    # root function
+    def f(mu):
+        return density(mu) - n_goal
+
+    # --------------------------------------------------------
+    # robust bracketing
+    # --------------------------------------------------------
+    a = eps.min() - 10.0
+    b = eps.max() + 10.0
+
+    fa = f(a)
+    fb = f(b)
+
+    step = 10.0
+
+    for _ in range(20):
+        if fa * fb < 0:
+            return brentq(f, a, b)
+
+        a -= step
+        b += step
+        fa = f(a)
+        fb = f(b)
+
+    # fallback (avoid crashing parallel jobs)
+    print("WARNING: could not bracket mu")
+    print("f(a) =", fa, "f(b) =", fb)
+    return np.nan
 
           
 def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, S_iwk_list=None, method='lindhard', refine=True, nk_avg=(1,1), fit=False, fit_type=critical1, n_iw_extr=True, save_file=None, verbose=True, tetra_method=False):
@@ -475,24 +541,26 @@ def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, S_iwk_list=None, method='
             U, T, n = par['U'], par['T'], par['n']
 
             mu = get_mu(e_k=lattice.e_k, n_goal=n, beta=1/T, S_iwk=S_iwk_list[i_var])
-            print(mu)
-            mu = 0.
-            Q, invchi0_Q = get_min_invchi0(lattice, mu, beta=1/T, q_path=q_path, S_iwk=S_iwk_list[i_var], method=method, refine=refine, n_iw_extr=n_iw_extr)
             
-            r"""
-                iw_mesh = MeshImFreq(beta=1/T, S='Fermion', n_iw=len(S_iw_list[i_var]))
-                S_iw = Gf(mesh=iw_mesh, target_shape=[1,1])
-                S_iw << 0
+            Q, invchi0_Q = get_min_invchi0(lattice, mu, beta=1/T, q_path=q_path, S_iwk=S_iwk_list[i_var], method=method, refine=refine, n_iw_extr=n_iw_extr)
+            """ now it works
+            S_iwk, n_iw, _ = get_iwk_arr(S_iwk_list[i_var], nk**dim, dim)
 
-                G_iwk = lattice_dyson_g_wk(mu, lattice.e_k, S_iw)
-                chi0 = imtime_bubble_chi0_wk(G_iwk, nw=1, verbose=False)
-                chi0_mesh = 1/chi0.data[0, :, 0, 0]
+            iw_mesh = MeshImFreq(beta=1/T, S='Fermion', n_iw=n_iw)
+            k_mesh = lattice.e_k.mesh
+            iwk_mesh = MeshProduct(iw_mesh, k_mesh)
+            S_iwk_gf = Gf(mesh=iwk_mesh, target_shape=[1,1])
+            S_iwk_gf.data[:n_iw,:,0,0] = S_iwk[::-1].conj()
+            S_iwk_gf.data[n_iw:,:,0,0] = S_iwk
 
-                max_idx = np.unravel_index(np.argmin(chi0_mesh), chi0_mesh.shape)
-                Q = 2*np.array(max_idx) / nk
-                invchi0_Q = chi0_mesh[max_idx]
+            G_iwk = lattice_dyson_g_wk(mu, lattice.e_k, S_iwk_gf)
+            chi0 = imtime_bubble_chi0_wk(G_iwk, nw=1, verbose=False)
+            invchi0_mesh = 1/chi0.data[0, :, 0, 0]
+
+            min_idx = np.unravel_index(np.argmin(invchi0_mesh), invchi0_mesh.shape)
+            Q = 2*np.array(min_idx) / nk + 1
+            invchi0_Q = invchi0_mesh[min_idx]
             """
-
             # Results for each U,T,n point
             invchi0_avg[i_var] += invchi0_Q.real
             Q_avg[i_var] += np.array(Q)
