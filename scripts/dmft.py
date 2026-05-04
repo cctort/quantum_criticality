@@ -4,7 +4,7 @@ from triqs.gf import *
 from triqs.plot.mpl_interface import *
 from triqs.lattice.tight_binding import dos
 from triqs.dos import HilbertTransform
-from my_dmft.scripts.utils import *
+from scripts.utils import *
 
 class DMFT:
     """
@@ -18,7 +18,7 @@ class DMFT:
         self.nk = nk
         self.n_eps = n_eps
 
-        # Matsubara frequency
+        # Gf on iw mesh
         self.iw_mesh = MeshImFreq(beta=beta, S='Fermion', n_iw=n_iw)
         self.G_iw = Gf(mesh=self.iw_mesh, target_shape=[1,1])
         self.G0_iw = self.G_iw.copy()
@@ -28,7 +28,7 @@ class DMFT:
         self.G_temp = self.G_iw.copy()
         self.S_temp = self.G_iw.copy()
         
-        # Imaginary time
+        # Gf on tau mesh
         self.tau_mesh = MeshImTime(beta=beta, S='Fermion', n_tau=8*n_iw+1)
         self.G0_tau = Gf(mesh=self.tau_mesh, target_shape=[1,1])
         self.S2_tau = self.G0_tau.copy()
@@ -66,7 +66,7 @@ class DMFT:
         # Simple form (exact at half-filling)
         S_iw << U * n + self.S2_iw
 
-    def square_gloc(self, G_iw, S_iw, mu):
+    def get_Gloc(self, G_iw, S_iw, mu):
 
         z_iw = np.array([complex(w) for w in self.iw_mesh]) + mu - S_iw.data[:,0,0]
 
@@ -91,12 +91,12 @@ class DMFT:
         elif solver == 'full':
             self.full_IPT(self.S_temp, U, n_goal, n0_val, mu_val[0], mu0_val)
 
-        self.square_gloc(self.G_temp, self.S_temp, mu_val[0])
+        self.get_Gloc(self.G_temp, self.S_temp, mu_val[0])
     
         return self.G_temp.total_density().real - n_goal
 
 
-    def run(self, U, n_goal=0.5, init_S=None, init_mu=None, init_label='metal', max_steps=1000, alpha=1., diff_tol=1e-10, slope_tol=1e-1, refinement=True, solver=None, half=False, verbose=True):
+    def run(self, U, n_goal=0.5, init_S=None, init_mu=None, init_label='metal', max_steps=1000, mix=1., diff_tol=1e-10, slope_tol=1e-1, refinement=True, solver=None, half=False, verbose=True):
 
         # Initial n and n0
         n0, n = n_goal, n_goal
@@ -136,10 +136,10 @@ class DMFT:
             else:
                 solver = 'full'
 
-        self.convergence = {'diff': [], 'alpha': [], 'n': [], 'mu': [], 'n0': [], 'mu0': []}
+        self.convergence = {'diff': [], 'mix': [], 'n': [], 'mu': [], 'n0': [], 'mu0': []}
         
         # Initial guess for hybridization from Hartree state
-        self.square_gloc(self.G_iw, self.S_iw, mu)
+        self.get_Gloc(self.G_iw, self.S_iw, mu)
         self.D_iw << iOmega_n + mu - self.S_iw - inverse(self.G_iw)
         
         if verbose:
@@ -187,10 +187,10 @@ class DMFT:
                 self.full_IPT(self.S_iw, U, n_goal, n0, mu, mu0)
 
             # Linear mixing of self-energy
-            self.S_iw.data[:,0,0] = (1-alpha)*S_iw_old + alpha*self.S_iw.data[:,0,0]
+            self.S_iw.data[:,0,0] = (1-mix)*S_iw_old + mix*self.S_iw.data[:,0,0]
 
             # Get G_loc
-            self.square_gloc(self.G_iw, self.S_iw, mu)
+            self.get_Gloc(self.G_iw, self.S_iw, mu)
             n = self.G_iw.total_density().real
 
             self.convergence['mu'].append(mu)
@@ -205,7 +205,7 @@ class DMFT:
             S_iw_new = self.S_iw.data[:,0,0].copy()
             diff = np.max(np.abs(S_iw_old - S_iw_new))
             self.convergence['diff'].append(diff)
-            self.convergence['alpha'].append(alpha)
+            self.convergence['mix'].append(mix)
             steps += 1
             if steps%10 == 0:
                 if verbose:
@@ -216,7 +216,7 @@ class DMFT:
                         if not refinement:
                             break
                         converged = True
-                        alpha /= 2
+                        mix /= 2
 
                 else:
                     # Refinement after convergence
@@ -229,7 +229,7 @@ class DMFT:
             
             # Reduce mixing parameter after enough steps
             #if steps == max_steps//2:
-            #    alpha /= 2
+            #    mix /= 2
         
         if converged:
             if verbose:
@@ -242,7 +242,7 @@ class DMFT:
         self.steps = steps
         self.converged = converged
             
-def sweep_dmft(params, lattice, init_label, alpha=1., n_iw=1024, nk=100, n_eps=100, verbose=False):
+def sweep_dmft(params, lattice, init_label, mix=1., n_iw=1024, nk=100, n_eps=100, verbose=False):
     """
     Run a 1D sweep of DMFT calculations over a list of tuples (T, U or n).
     """
@@ -269,7 +269,7 @@ def sweep_dmft(params, lattice, init_label, alpha=1., n_iw=1024, nk=100, n_eps=1
             prev_mu = None
 
         # Run DMFT
-        dmft.run(U=par['U'], n_goal=par['n'], init_S=prev_S, init_mu=prev_mu, init_label=init_label, alpha=alpha, verbose=verbose)
+        dmft.run(U=par['U'], n_goal=par['n'], init_S=prev_S, init_mu=prev_mu, init_label=init_label, mix=mix, verbose=verbose)
 
         # Store results if converged
         if dmft.converged:
@@ -297,28 +297,10 @@ def sweep_dmft(params, lattice, init_label, alpha=1., n_iw=1024, nk=100, n_eps=1
         't': lattice.t,
         'dim': lattice.dim,
         'init_label': init_label,
-        'alpha': alpha,
+        'mix': mix,
         'n_iw': n_iw,
         'nk': nk,
         'n_eps': n_eps
     }
     
     return results
-
-r"""
-def sweep_parallel(sweep_list, lattice, init_label, alpha=1., n_iw=1024, nk=100, n_eps=100, n_jobs=-1):
-
-    def _worker(params, lattice_args, init_label, alpha, n_iw, nk, n_eps):
-        lattice = LATTICE(**lattice_args)
-        return sweep_dmft(params, lattice, init_label, alpha, n_iw, nk, n_eps)
-
-    lattice_args = {'t': lattice.t, 'dim': lattice.dim}
-    results_list = Parallel(n_jobs=n_jobs, verbose=10)(
-        delayed(_worker)(params, lattice_args, init_label, alpha, n_iw, nk, n_eps)
-        for params in sweep_list
-    )
-    results = {}
-    for r in results_list:
-        results.update(r)
-    return results
-"""

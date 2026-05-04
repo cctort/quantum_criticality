@@ -97,5 +97,8 @@ def sweep_parallel(worker, sweep_list, save_file=None, n_jobs=-1):
         HDFwrite_list(save_file, results_list)
     return results_list
 
-def critical(x, a, b, c):
-    return a * (x**b - np.sign(c)*np.abs(c)**b)
+def critical2(x, a, b, c):
+    return a * (x - c)**b
+
+def critical1(x, a, b, c):
+    return a * x ** b - a * c ** b

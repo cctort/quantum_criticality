@@ -318,7 +318,7 @@ def pcut_dmft(results, var_label, title='', label='', figure=None):
 
     return fig, axs
 
-def pcut_chi(results, var_label, plot_Q=(1,1,1), fit=False, x_exp=1,
+def pcut_chi(results, var_label, plot_Q=(1,1,1), fit=False, x_exp=1, y_exp=-1, scale=('lin','lin'),
              title='', label='', figure=None, alpha=1., color=None):
 
     # Create figure if needed
@@ -327,13 +327,29 @@ def pcut_chi(results, var_label, plot_Q=(1,1,1), fit=False, x_exp=1,
         fig = plt.figure(figsize=(12, 5))
         axs = [None]*(1+sum(plot_Q))
         axs[0] = fig.add_subplot(1, 2, 1)
+        
         if x_exp == 1:
-            axs[0].set_xlabel(f'${var_label}$')
+            x_label = var_label
         elif x_exp == 0.5:
-            axs[0].set_xlabel(rf'$\sqrt{{{var_label}}}$')
+            x_label = rf'$\sqrt{{{var_label}}}$'
         else:
-            axs[0].set_xlabel(rf'${var_label}^{{{x_exp}}}$')
-        axs[0].set_ylabel(r'$\chi^{-1}(\mathbf{Q})$')
+            x_label = rf'${var_label}^{{{x_exp:.2f}}}$'
+
+        if y_exp == 1:
+            y_label = r'$\chi(\mathbf{Q})$'
+        elif y_exp == -1:
+            y_label = r'$\chi^{-1}(\mathbf{Q})$'
+        else:
+            y_label = rf'$\chi^{y_exp:.2f}(\mathbf{{Q}})$'
+
+        if scale[0] == 'log':
+            axs[0].set_xscale('log')
+        if scale[1] == 'log':
+            axs[0].set_yscale('log')
+
+        axs[0].set_xlabel(x_label)
+        axs[0].set_ylabel(y_label)
+
         axs[0].set_title('Susceptibility')
         axs[0].grid()
         
@@ -371,7 +387,7 @@ def pcut_chi(results, var_label, plot_Q=(1,1,1), fit=False, x_exp=1,
         marker = 'o-'
 
     # Plot main line
-    axs[0].plot(var_arr**x_exp, invchi, marker, markersize=4, color=color, label=label, alpha=alpha)
+    axs[0].plot(var_arr**x_exp, (1/invchi)**y_exp, marker, markersize=4, color=color, label=label, alpha=alpha)
 
     # Plot Q components
     dim = len(results['Q'][0])
