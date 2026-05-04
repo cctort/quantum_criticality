@@ -228,8 +228,8 @@ def lindhard(mu, beta, e_k, e_kq, S_k, S_kq):
         Gamma_k = - S_k[k].imag
         Gamma_kq = - S_kq[k].imag
 
-        xk = beta * (e_k_eff + 1j*Gamma_k - mu)
-        xkq = beta * (e_kq_eff + 1j*Gamma_kq - mu)
+        xk = beta * (e_k_eff + 1j*Gamma_k*0 - mu)
+        xkq = beta * (e_kq_eff + 1j*Gamma_kq*0 - mu)
 
         if xk.real > 500.0:
             nF_k = 0.0 + 0.0j
@@ -245,7 +245,7 @@ def lindhard(mu, beta, e_k, e_kq, S_k, S_kq):
         else:
             nF_kq = 1.0 / (cexp(xkq) + 1.0)
 
-        de = (e_k_eff - e_kq_eff) - 1j*(Gamma_k - Gamma_kq)
+        de = (e_k_eff - e_kq_eff) - 1j*(Gamma_k + Gamma_kq)
 
         if abs(de) < 1e-8:
             chi0 = - beta * nF_k * (1.0 - nF_k)
@@ -386,9 +386,6 @@ from numba import njit
 from scipy.optimize import brentq
 
 
-# ============================================================
-# JIT: full Matsubara density (slow case, but compiled)
-# ============================================================
 @njit
 def _density_iw(eps, S_iwk, mu, beta):
     n_iw, Nk = S_iwk.shape
@@ -428,9 +425,6 @@ def _density_iw(eps, S_iwk, mu, beta):
     return n_tot / Nk
 
 
-# ============================================================
-# fast density: frequency-independent Σ
-# ============================================================
 def _density_static(eps, Phi, Gamma, mu, beta):
     x  = eps + Phi - mu
     xr = np.clip(beta * x, -500, 500)
@@ -447,9 +441,6 @@ def _density_static(eps, Phi, Gamma, mu, beta):
     return np.mean(2.0 * nF_real)
 
 
-# ============================================================
-# main function
-# ============================================================
 def get_mu(e_k, n_goal, beta, S_iwk=None, dim=None):
 
     eps = e_k.data[:, 0, 0].real.flatten()
@@ -474,9 +465,6 @@ def get_mu(e_k, n_goal, beta, S_iwk=None, dim=None):
     def f(mu):
         return density(mu) - n_goal
 
-    # --------------------------------------------------------
-    # robust bracketing
-    # --------------------------------------------------------
     a = eps.min() - 10.0
     b = eps.max() + 10.0
 
@@ -543,7 +531,8 @@ def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, S_iwk_list=None, method='
             mu = get_mu(e_k=lattice.e_k, n_goal=n, beta=1/T, S_iwk=S_iwk_list[i_var])
             
             Q, invchi0_Q = get_min_invchi0(lattice, mu, beta=1/T, q_path=q_path, S_iwk=S_iwk_list[i_var], method=method, refine=refine, n_iw_extr=n_iw_extr)
-            """ now it works
+            
+            """
             S_iwk, n_iw, _ = get_iwk_arr(S_iwk_list[i_var], nk**dim, dim)
 
             iw_mesh = MeshImFreq(beta=1/T, S='Fermion', n_iw=n_iw)
