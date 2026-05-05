@@ -88,11 +88,10 @@ def make_poly(degrees):
     return poly
 
 def sweep_parallel(worker, sweep_list, save_file=None, n_jobs=-1):
-    with threadpool_limits(limits=1):
-        results_list = Parallel(n_jobs=n_jobs, verbose=10)(
-            delayed(worker)(**{**sweep_dict, 'verbose': False})
-            for sweep_dict in sweep_list
-        )
+    results_list = Parallel(n_jobs=n_jobs, verbose=10)(
+        delayed(worker)(**{**sweep_dict, 'verbose': False})
+        for sweep_dict in sweep_list
+    )
     if save_file is not None:
         HDFwrite_list(save_file, results_list)
     return results_list
