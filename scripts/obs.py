@@ -10,8 +10,6 @@ import time
 from scipy.optimize import curve_fit
 import numba as nb
 from numba import njit
-import pyfftw
-pyfftw.interfaces.cache.enable()
 
 def get_A_iw0k(G_iwk, n_pade=60):
 
