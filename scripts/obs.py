@@ -315,59 +315,26 @@ def _accumulate_chi0(chi0_re, chi0_im, G_r_re, G_r_im):
                 chi0_re[i, j, k] += ar*ar - ai*ai
                 chi0_im[i, j, k] += 2.0*ar*ai
 
-def compute_chi0_fft(lattice, mu, T, S_iwk, n_iw, nk, dim=3):
-    
-    beta  = 1.0 / T
-    iw_n  = (2*np.arange(n_iw) + 1) * np.pi / beta       # (n_iw,), matches reference
-    e_k_flat = lattice.e_k.data.reshape(nk**dim).real
-    
-    if dim == 3:
-        e_k = e_k_flat.reshape(nk, nk, nk)
-    elif dim == 2:
-        e_k = np.broadcast_to(e_k_flat.reshape(nk, nk, 1), (nk, nk, nk)).copy()
-    elif dim == 1:
-        e_k = np.broadcast_to(e_k_flat.reshape(nk, 1, 1), (nk, nk, nk)).copy()
-    
-    S_iwk_2d  = np.asarray(S_iwk).reshape(n_iw, nk**dim)
-    has_sigma = not np.all(S_iwk_2d == 0)
-    chi0_re = np.zeros((nk, nk, nk), dtype=np.float64)
-    chi0_im = np.zeros((nk, nk, nk), dtype=np.float64)
-    
-    for n in range(n_iw):
-        sig = S_iwk_2d[n].reshape(nk, nk, nk) if has_sigma else 0.0
-        G_k = 1.0 / (1j*iw_n[n] + mu - e_k - sig)        # (nk,nk,nk)
-        G_r = np.fft.ifftn(G_k)                            # (nk,nk,nk), includes 1/Nk
-        _accumulate_chi0(chi0_re, chi0_im, 
-                         np.ascontiguousarray(G_r.real),
-                         np.ascontiguousarray(G_r.imag))
-        del G_k, G_r
-    
-    chi0_q    = (-2.0 / beta * np.fft.fftn(chi0_re + 1j*chi0_im)).real  # matches reference prefactor
-    invchi0_mesh = 1.0 / chi0_q
-    min_idx   = np.unravel_index(np.argmin(invchi0_mesh), invchi0_mesh.shape)
-    Q         = np.sort(1 - np.abs(2*np.array(min_idx)/nk - 1))[::-1]
-    invchi0_Q = invchi0_mesh[min_idx]
-    
-    return Q, invchi0_Q
-
 def get_iwk_arr(S_val, Nk, dim):
     k_dep = False
     if S_val is None or isinstance(S_val, (int, float, complex)):
         val = 0j if S_val is None else complex(S_val)
-        S_val = np.full((1, Nk), val, dtype=complex)
+        S_val = np.full((1, 1), val, dtype=complex)  # (1,1) — broadcasts, never tiled
         n_iw = 1
 
     else:
         S_val = np.asanyarray(S_val, dtype=complex)
-        
+
         if S_val.ndim == 1:
             if len(S_val) == Nk:
-                S_val = S_val[np.newaxis, :]
+                # k-dependent, no frequency axis
+                S_val = S_val[np.newaxis, :]          # (1, Nk)
                 k_dep = True
                 n_iw = 1
             else:
+                # k-independent, frequency-dependent: keep as (n_iw, 1)
                 n_iw = len(S_val)
-                S_val = np.tile(S_val[:, np.newaxis], (1, Nk))
+                S_val = S_val[:, np.newaxis]          # (n_iw, 1) — broadcasts over k
 
         elif S_val.ndim == dim:
             S_val = S_val.reshape(1, Nk)
@@ -375,11 +342,49 @@ def get_iwk_arr(S_val, Nk, dim):
             n_iw = 1
 
         else:
-            # (n_iw, Nk) already — don't reshape!
+            # (n_iw, Nk) already — genuinely k-dependent
             n_iw = S_val.shape[0]
             k_dep = True
-    
+
     return S_val, n_iw, k_dep
+
+
+def compute_chi0_fft(lattice, mu, T, S_iwk, n_iw, nk, dim=3):
+
+    beta = 1.0 / T
+    iw_n = (2*np.arange(n_iw) + 1) * np.pi / beta
+    e_k  = lattice.e_k.data[:, 0, 0].real.reshape(nk, nk, nk)
+
+    # S_iwk is (n_iw, 1) or (n_iw, Nk) — check if it's all zero
+    has_sigma = not np.allclose(S_iwk, 0)
+
+    chi0_r = np.zeros((nk, nk, nk), dtype=np.complex128)
+    G_r    = np.zeros((nk, nk, nk), dtype=np.complex128)
+
+    for n in range(n_iw):
+        if has_sigma:
+            # S_iwk[n] is shape (1,) or (Nk,) — both broadcast correctly against (nk,nk,nk)
+            sig = S_iwk[n].reshape(-1)[0] if S_iwk.shape[1] == 1 else S_iwk[n].reshape(nk, nk, nk)
+        else:
+            sig = 0.0
+
+        G_k = 1.0 / (1j*iw_n[n] + mu - e_k - sig)  # (nk,nk,nk), ~8 MB at nk=100
+        np.fft.ifftn(G_k, out=G_r)
+        del G_k
+
+        chi0_r.real += G_r.real * G_r.real - G_r.imag * G_r.imag
+        chi0_r.imag += 2.0 * G_r.real * G_r.imag
+
+    chi0_q = np.fft.fftn(chi0_r)
+    chi0_q *= -2.0 / beta
+    invchi0_mesh = chi0_q.real.copy()
+    np.reciprocal(invchi0_mesh, out=invchi0_mesh)
+
+    min_idx   = np.unravel_index(np.argmin(invchi0_mesh), invchi0_mesh.shape)
+    Q         = np.sort(1 - np.abs(2*np.array(min_idx)/nk - 1))[::-1]
+    invchi0_Q = invchi0_mesh[min_idx]
+
+    return Q, invchi0_Q
 
 def get_min_invchi0(lattice, mu, beta, q_path=None, method='lindhard', S_iwk=None, refine=True, n_iw_extr=False):
 
@@ -429,7 +434,7 @@ def get_min_invchi0(lattice, mu, beta, q_path=None, method='lindhard', S_iwk=Non
 
             if method == 'lindhard':
                 return 1/lindhard(mu, beta, e_k, e_kq, S_iwk[0], S_iwkq[0])
-            if method == 'lindhard2':
+            elif method == 'lindhard2':
                 return 1/lindhard2(mu, beta, e_k, e_kq, S_iwk[0], S_iwkq[0])
             elif method == 'matsubara':
                 return 1/matsubara_sum(mu, beta, e_k, e_kq, S_iwk, S_iwkq)
@@ -566,6 +571,10 @@ def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, S_iwk_list=None, method='
     """
     Run a 1D sweep of DMFT calculations over a list of tuples (T, U or n).
     """
+    import tracemalloc, os, psutil
+
+    tracemalloc.start()
+    process = psutil.Process(os.getpid())
 
     start_time = time.time()
 
@@ -620,7 +629,8 @@ def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, S_iwk_list=None, method='
                 Q = np.sort(1-np.abs(2*np.array(min_idx) / nk-1))[::-1]
                 invchi0_Q = invchi0_mesh[min_idx]
 
-            if method == 'matsubara_fft':
+            elif method == 'matsubara_fft':
+
                 S_iwk, n_iw, _ = get_iwk_arr(S_iwk_list[i_var], nk**dim, dim)
                 
                 Q, invchi0_Q = compute_chi0_fft(lattice, mu, T, S_iwk, n_iw, nk, dim)
@@ -693,5 +703,5 @@ def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, S_iwk_list=None, method='
     elapsed_time = time.time() - start_time
     if verbose:
         print(f"\rCompleted {len(par_dict[list_label])} jobs in {elapsed_time:.2f} seconds | U={U:.3f}, T={T:.3f}, n={n:.3f}")
-    
+
     return results
