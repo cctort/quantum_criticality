@@ -8,7 +8,10 @@ from scripts.utils import *
 from scripts.lattice import *
 import time
 from scipy.optimize import curve_fit
+import numba as nb
 from numba import njit
+import pyfftw
+pyfftw.interfaces.cache.enable()
 
 def get_A_iw0k(G_iwk, n_pade=60):
 
@@ -201,12 +204,6 @@ def lindhard_blochl(mu, beta, e_k, e_kq, tetrahedra, S_k=0., S_kq=0.):
 
     return chi0 / len(tetrahedra)
 
-from numba import njit
-import numpy as np
-
-from numba import njit
-import numpy as np
-
 @njit
 def cexp(z):
     zr = z.real
@@ -307,6 +304,53 @@ def matsubara_sum(mu, beta, e_k, e_kq, S_iwk, S_iwkq):
             G_iwkq = 1.0 / (iw + mu - e_kq[k] - S_iwkq[n,k])
             chi0 += G_iwk * G_iwkq
     return (-2.0 / beta * chi0).real / Nk
+
+@njit
+def _accumulate_chi0(chi0_re, chi0_im, G_r_re, G_r_im):
+
+    nk0, nk1, nk2 = G_r_re.shape
+    for i in nb.prange(nk0):
+        for j in range(nk1):
+            for k in range(nk2):
+                ar = G_r_re[i, j, k]
+                ai = G_r_im[i, j, k]
+                chi0_re[i, j, k] += ar*ar - ai*ai
+                chi0_im[i, j, k] += 2.0*ar*ai
+
+def compute_chi0_fft(lattice, mu, T, S_iwk, n_iw, nk, dim=3):
+    
+    beta  = 1.0 / T
+    iw_n  = (2*np.arange(n_iw) + 1) * np.pi / beta       # (n_iw,), matches reference
+    e_k_flat = lattice.e_k.data.reshape(nk**dim).real
+    
+    if dim == 3:
+        e_k = e_k_flat.reshape(nk, nk, nk)
+    elif dim == 2:
+        e_k = np.broadcast_to(e_k_flat.reshape(nk, nk, 1), (nk, nk, nk)).copy()
+    elif dim == 1:
+        e_k = np.broadcast_to(e_k_flat.reshape(nk, 1, 1), (nk, nk, nk)).copy()
+    
+    S_iwk_2d  = np.asarray(S_iwk).reshape(n_iw, nk**dim)
+    has_sigma = not np.all(S_iwk_2d == 0)
+    chi0_re = np.zeros((nk, nk, nk), dtype=np.float64)
+    chi0_im = np.zeros((nk, nk, nk), dtype=np.float64)
+    
+    for n in range(n_iw):
+        sig = S_iwk_2d[n].reshape(nk, nk, nk) if has_sigma else 0.0
+        G_k = 1.0 / (1j*iw_n[n] + mu - e_k - sig)        # (nk,nk,nk)
+        G_r = np.fft.ifftn(G_k)                            # (nk,nk,nk), includes 1/Nk
+        _accumulate_chi0(chi0_re, chi0_im, 
+                         np.ascontiguousarray(G_r.real),
+                         np.ascontiguousarray(G_r.imag))
+        del G_k, G_r
+    
+    chi0_q    = (-2.0 / beta * np.fft.fftn(chi0_re + 1j*chi0_im)).real  # matches reference prefactor
+    invchi0_mesh = 1.0 / chi0_q
+    min_idx   = np.unravel_index(np.argmin(invchi0_mesh), invchi0_mesh.shape)
+    Q         = np.sort(1 - np.abs(2*np.array(min_idx)/nk - 1))[::-1]
+    invchi0_Q = invchi0_mesh[min_idx]
+    
+    return Q, invchi0_Q
 
 def get_iwk_arr(S_val, Nk, dim):
     k_dep = False
@@ -571,12 +615,17 @@ def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, S_iwk_list=None, method='
                 S_iwk_gf.data[n_iw:,:,0,0] = S_iwk
 
                 G_iwk = lattice_dyson_g_wk(mu, lattice.e_k, S_iwk_gf)
-                chi0 = imtime_bubble_chi0_wk(G_iwk, nw=1, verbose=False)
+                chi0 = imtime_bubble_chi0_wk(G_iwk, nw=1, verbose=False, save_memory=True)
                 invchi0_mesh = 1/chi0.data[0, :, 0, 0].reshape(nk,nk,nk)
 
                 min_idx = np.unravel_index(np.argmin(invchi0_mesh), invchi0_mesh.shape)
-                Q = 2*np.array(min_idx) / nk
+                Q = np.sort(1-np.abs(2*np.array(min_idx) / nk-1))[::-1]
                 invchi0_Q = invchi0_mesh[min_idx]
+
+            if method == 'matsubara_fft':
+                S_iwk, n_iw, _ = get_iwk_arr(S_iwk_list[i_var], nk**dim, dim)
+                
+                Q, invchi0_Q = compute_chi0_fft(lattice, mu, T, S_iwk, n_iw, nk, dim)
             else:
 
                 Q, invchi0_Q = get_min_invchi0(lattice, mu, beta=1/T, q_path=q_path, S_iwk=S_iwk_list[i_var], method=method, refine=refine, n_iw_extr=n_iw_extr)
@@ -597,8 +646,8 @@ def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, S_iwk_list=None, method='
 
     if fit:
         pos_mask = results['invchi'] > 0
-        x_fit = np.array(par_dict[list_label])[pos_mask][:10]
-        y_fit = results['invchi'][pos_mask][:10]
+        x_fit = np.array(par_dict[list_label])[pos_mask][:15]
+        y_fit = results['invchi'][pos_mask][:15]
         if len(x_fit) >= 2:
             try:
                 
@@ -606,8 +655,8 @@ def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, S_iwk_list=None, method='
                     fit_type,
                     x_fit,
                     y_fit,
-                    p0=[1., 1., np.min(x_fit)*0.9],
-                    bounds = ([0, 0, 0], [np.inf, np.inf, np.min(x_fit)]),
+                    p0=[1., 0.8, np.min(x_fit)*0.9],
+                    bounds = ([0., 0., -np.inf], [np.inf, np.inf, np.inf]),
                     maxfev=10000
                 )
                 

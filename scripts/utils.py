@@ -88,16 +88,17 @@ def make_poly(degrees):
     return poly
 
 def sweep_parallel(worker, sweep_list, save_file=None, n_jobs=-1):
-    results_list = Parallel(n_jobs=n_jobs, verbose=10)(
-        delayed(worker)(**{**sweep_dict, 'verbose': False})
-        for sweep_dict in sweep_list
-    )
+    with threadpool_limits(1):
+        results_list = Parallel(n_jobs=n_jobs, verbose=10, backend='loky')(
+            delayed(worker)(**{**sweep_dict, 'verbose': False})
+            for sweep_dict in sweep_list
+        )
     if save_file is not None:
         HDFwrite_list(save_file, results_list)
     return results_list
 
-def critical2(x, a, b, c):
-    return a * (x - c)**b
-
 def critical1(x, a, b, c):
-    return a * x ** b - a * c ** b
+    return a * x ** b - np.sign(c)*a * np.abs(c) **b
+
+def critical2(x, a, b, c):
+    return a * np.sign(x - c)*np.abs(x - c)**b
