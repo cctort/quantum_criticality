@@ -303,146 +303,161 @@ def matsubara_sum(mu, beta, e_k, e_kq, S_iwk, S_iwkq):
             chi0 += G_iwk * G_iwkq
     return (-2.0 / beta * chi0).real / Nk
 
-@njit
-def _accumulate_chi0(chi0_re, chi0_im, G_r_re, G_r_im):
-
-    nk0, nk1, nk2 = G_r_re.shape
-    for i in nb.prange(nk0):
-        for j in range(nk1):
-            for k in range(nk2):
-                ar = G_r_re[i, j, k]
-                ai = G_r_im[i, j, k]
-                chi0_re[i, j, k] += ar*ar - ai*ai
-                chi0_im[i, j, k] += 2.0*ar*ai
-
-def get_iwk_arr(S_val, Nk, dim):
+def get_iwk_arr(S_val, Nk, dim, n_iw=1):
     k_dep = False
+
     if S_val is None or isinstance(S_val, (int, float, complex)):
         val = 0j if S_val is None else complex(S_val)
-        S_val = np.full((1, 1), val, dtype=complex)  # (1,1) — broadcasts, never tiled
-        n_iw = 1
+        # if caller wants n_iw > 1 with a constant sigma, broadcast over frequencies too
+        S_val = np.full((n_iw, 1), val, dtype=complex)
 
     else:
         S_val = np.asanyarray(S_val, dtype=complex)
 
         if S_val.ndim == 1:
             if len(S_val) == Nk:
-                # k-dependent, no frequency axis
-                S_val = S_val[np.newaxis, :]          # (1, Nk)
+                # k-dependent, no frequency axis — replicate to n_iw if requested
+                S_val = np.tile(S_val[np.newaxis, :], (n_iw, 1))  # (n_iw, Nk)
                 k_dep = True
-                n_iw = 1
             else:
-                # k-independent, frequency-dependent: keep as (n_iw, 1)
+                # k-independent, frequency-dependent: (len,) → (len, 1)
+                # input length takes priority over n_iw
                 n_iw = len(S_val)
-                S_val = S_val[:, np.newaxis]          # (n_iw, 1) — broadcasts over k
+                S_val = S_val[:, np.newaxis]                        # (n_iw, 1)
 
         elif S_val.ndim == dim:
-            S_val = S_val.reshape(1, Nk)
+            # k-dependent spatial array, no frequency axis
+            S_val = np.tile(S_val.reshape(1, Nk), (n_iw, 1))      # (n_iw, Nk)
             k_dep = True
-            n_iw = 1
 
         else:
-            # (n_iw, Nk) already — genuinely k-dependent
+            # (n_iw', Nk) already — n_iw' takes priority
             n_iw = S_val.shape[0]
             k_dep = True
 
     return S_val, n_iw, k_dep
 
-
-def compute_chi0_fft(lattice, mu, T, S_iwk, n_iw, nk, dim=3):
+def compute_chi0_fft(lattice, mu, T, S_iwk, n_iw, nk, n_iw_extr=False):
 
     beta = 1.0 / T
-    iw_n = (2*np.arange(n_iw) + 1) * np.pi / beta
     e_k  = lattice.e_k.data[:, 0, 0].real.reshape(nk, nk, nk)
-
-    # S_iwk is (n_iw, 1) or (n_iw, Nk) — check if it's all zero
     has_sigma = not np.allclose(S_iwk, 0)
 
-    chi0_r = np.zeros((nk, nk, nk), dtype=np.complex128)
-    G_r    = np.zeros((nk, nk, nk), dtype=np.complex128)
+    def _run(n_iw_run):
+        iw_n  = (2*np.arange(n_iw_run) + 1) * np.pi / beta
+        chi0_r = np.zeros((nk, nk, nk), dtype=np.complex128)
+        G_r    = np.zeros((nk, nk, nk), dtype=np.complex128)
 
-    for n in range(n_iw):
-        if has_sigma:
-            # S_iwk[n] is shape (1,) or (Nk,) — both broadcast correctly against (nk,nk,nk)
-            sig = S_iwk[n].reshape(-1)[0] if S_iwk.shape[1] == 1 else S_iwk[n].reshape(nk, nk, nk)
-        else:
-            sig = 0.0
+        for n in range(n_iw_run):
+            if has_sigma:
+                sig = S_iwk[n, 0] if S_iwk.shape[1] == 1 else S_iwk[n].reshape(nk, nk, nk)
+            else:
+                sig = 0.0
 
-        G_k = 1.0 / (1j*iw_n[n] + mu - e_k - sig)  # (nk,nk,nk), ~8 MB at nk=100
-        np.fft.ifftn(G_k, out=G_r)
-        del G_k
+            G_k = 1.0 / (1j*iw_n[n] + mu - e_k - sig)
+            np.fft.ifftn(G_k, out=G_r)
+            del G_k
 
-        chi0_r.real += G_r.real * G_r.real - G_r.imag * G_r.imag
-        chi0_r.imag += 2.0 * G_r.real * G_r.imag
+            chi0_r.real += G_r.real * G_r.real - G_r.imag * G_r.imag
+            chi0_r.imag += 2.0 * G_r.real * G_r.imag
 
-    chi0_q = np.fft.fftn(chi0_r)
-    chi0_q *= -2.0 / beta
-    invchi0_mesh = chi0_q.real.copy()
-    np.reciprocal(invchi0_mesh, out=invchi0_mesh)
+        chi0_q = np.fft.fftn(chi0_r)
+        chi0_q *= -2.0 / beta
+        invchi0_mesh = chi0_q.real.copy()
+        np.reciprocal(invchi0_mesh, out=invchi0_mesh)
+        return invchi0_mesh
 
+    invchi0_mesh = _run(n_iw)
     min_idx   = np.unravel_index(np.argmin(invchi0_mesh), invchi0_mesh.shape)
     Q         = np.sort(1 - np.abs(2*np.array(min_idx)/nk - 1))[::-1]
     invchi0_Q = invchi0_mesh[min_idx]
 
+    if n_iw_extr:
+        # same subsampling scheme as get_min_invchi0
+        n_iw_list      = [n_iw]
+        invchi0_Q_list = [invchi0_Q]
+
+        for s in [2, 3, 4]:
+            n_sub = n_iw // s
+            if n_sub < 4:
+                break
+            mesh_sub  = _run(n_sub)
+            invchi0_Q_list.append(mesh_sub[min_idx])  # same q-point as full run
+            n_iw_list.append(n_sub)
+
+        coeff     = np.polyfit(1./np.array(n_iw_list), invchi0_Q_list, 2)
+        invchi0_Q = coeff[-1]  # extrapolated value at 1/n_iw → 0
+
     return Q, invchi0_Q
 
-def get_min_invchi0(lattice, mu, beta, q_path=None, method='lindhard', S_iwk=None, refine=True, n_iw_extr=False):
+def get_min_invchi0(lattice, mu, beta, q_path=None, method='lindhard', n_iw=1, S_iwk=None, refine=True, n_iw_extr=False):
 
     nk = lattice.nk
     dim = lattice.dim
 
-    S_iwk, n_iw, k_dep = get_iwk_arr(S_iwk, nk**dim, dim)
-    
+    S_iwk, n_iw, k_dep = get_iwk_arr(S_iwk, nk**dim, dim, n_iw)
+
+    def expand(S, Nk):
+        """Tile only if k-independent, and only to the path length Nk."""
+        return S if S.shape[1] > 1 else np.tile(S, (1, Nk))
+
     invchi_grid = []
     for q in q_path:
         e_k, e_kq = lattice.get_e_kq(q, 'coarse')
-        
+
         if k_dep:
             S_iwkq = lattice.get_f_iwkq(S_iwk, q, 'coarse')
         else:
             S_iwkq = S_iwk
-        
+
+        S_k  = expand(S_iwk,  len(e_k))
+        S_kq = expand(S_iwkq, len(e_kq))
+
         if method == 'lindhard':
-            invchi_grid.append(1/lindhard(mu, beta, e_k, e_kq, S_iwk[0], S_iwkq[0]))
+            invchi_grid.append(1/lindhard(mu, beta, e_k, e_kq, S_k[0], S_kq[0]))
         elif method == 'lindhard2':
-            invchi_grid.append(1/lindhard2(mu, beta, e_k, e_kq, S_iwk[0], S_iwkq[0]))
+            invchi_grid.append(1/lindhard2(mu, beta, e_k, e_kq, S_k[0], S_kq[0]))
         elif method == 'matsubara':
-            invchi_grid.append(1/matsubara_sum(mu, beta, e_k, e_kq, S_iwk, S_iwkq))
-    
+            invchi_grid.append(1/matsubara_sum(mu, beta, e_k, e_kq, S_k, S_kq))
+
     idx = np.argmin(invchi_grid)
     best_q = q_path[idx]
     invchi0_min = invchi_grid[idx]
 
     if refine and q_path is not None:
-        
+
         start = q_path[0]
-        end = q_path[-1]
-        step = 1 / (len(q_path) - 1)
+        end   = q_path[-1]
+        step  = 1 / (len(q_path) - 1)
 
         if k_dep:
             S_iwR = lattice.get_f_iwR(S_iwk)
 
-        def invchi0(s, S_iwk):
-            
+        def invchi0(s, S_iwk_arg):
+
             q = start + s * (end - start)
             e_k, e_kq = lattice.get_e_kq(q, 'fine')
 
             if k_dep:
-                S_iwkq = lattice.get_f_iwkq(S_iwk, q, 'fine', S_iwR)
+                S_iwkq = lattice.get_f_iwkq(S_iwk_arg, q, 'fine', S_iwR)
             else:
-                S_iwkq = S_iwk
+                S_iwkq = S_iwk_arg
+
+            S_k  = expand(S_iwk_arg, len(e_k))
+            S_kq = expand(S_iwkq,    len(e_kq))
 
             if method == 'lindhard':
-                return 1/lindhard(mu, beta, e_k, e_kq, S_iwk[0], S_iwkq[0])
+                return 1/lindhard(mu, beta, e_k, e_kq, S_k[0], S_kq[0])
             elif method == 'lindhard2':
-                return 1/lindhard2(mu, beta, e_k, e_kq, S_iwk[0], S_iwkq[0])
+                return 1/lindhard2(mu, beta, e_k, e_kq, S_k[0], S_kq[0])
             elif method == 'matsubara':
-                return 1/matsubara_sum(mu, beta, e_k, e_kq, S_iwk, S_iwkq)
+                return 1/matsubara_sum(mu, beta, e_k, e_kq, S_k, S_kq)
 
         s0 = idx / (len(q_path) - 1)
+        res = minimize_scalar(invchi0, method='bounded',
+                              bounds=(max(0, s0 - 5*step), min(1, s0 + 5*step)),
+                              args=(S_iwk,))
 
-        res = minimize_scalar(invchi0, method='bounded', bounds=(max(0, s0 - 5*step), min(1, s0 + 5*step)), args=(S_iwk,))
-        
         s_min = res.x
         best_q = start + s_min * (end - start)
         invchi0_min = invchi0(s_min, S_iwk)
@@ -520,10 +535,10 @@ def _density_static(eps, Phi, Gamma, mu, beta):
     return np.mean(2.0 * nF_real)
 
 
-def get_mu(e_k, n_goal, beta, S_iwk=None, dim=None):
+def get_mu(e_k, n_goal, beta, n_iw=1, S_iwk=None, dim=None):
 
     eps = e_k.data[:, 0, 0].real.flatten()
-    S_iwk, n_iw, _ = get_iwk_arr(S_iwk, Nk=len(eps), dim=dim)
+    S_iwk, n_iw, _ = get_iwk_arr(S_iwk, Nk=len(eps), dim=dim, n_iw=n_iw)
 
     # detect frequency independence
     freq_indep = np.allclose(S_iwk, S_iwk[0:1, :])
@@ -567,14 +582,10 @@ def get_mu(e_k, n_goal, beta, S_iwk=None, dim=None):
     return np.nan
 
           
-def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, S_iwk_list=None, method='lindhard', refine=True, nk_avg=(1,1), fit=False, fit_type=critical1, n_iw_extr=False, save_file=None, verbose=True):
+def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, n_iw=1, S_iwk_list=None, method='lindhard', refine=True, nk_avg=(1,1), fit=False, fit_type=critical1, n_iw_extr=False, save_file=None, verbose=True):
     """
     Run a 1D sweep of DMFT calculations over a list of tuples (T, U or n).
     """
-    import tracemalloc, os, psutil
-
-    tracemalloc.start()
-    process = psutil.Process(os.getpid())
 
     start_time = time.time()
 
@@ -583,11 +594,13 @@ def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, S_iwk_list=None, method='
     # Extract the parameter list for the loop
     list_label = next(k for k, v in par_dict.items() if isinstance(v, (list, np.ndarray)))
 
-    if S_iwk_list is None:
-        S_iwk_list = [None]*len(par_dict[list_label])
+    if isinstance(S_iwk_list, (list, np.ndarray)) and len(S_iwk_list) == len(par_dict[list_label]):
+        pass
+    else:
+        S_iwk_list = [S_iwk_list] * len(par_dict[list_label])
     
     # Sweep initialization
-    results = {'t': lattice.t, 'dim': lattice.dim, 'nk': nk,
+    results = {'t': lattice.t, 'dim': lattice.dim, 'nk': nk, 'n_iw': n_iw,
                'S_iwk_list': S_iwk_list, 'refine': refine, 'n_iw_extr': n_iw_extr,
                'invchi': [],  'Q': [], 'par_list': []}
 
@@ -613,7 +626,7 @@ def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, S_iwk_list=None, method='
             
             if method == 'matsubara_tprf':
 
-                S_iwk, n_iw, _ = get_iwk_arr(S_iwk_list[i_var], nk**dim, dim)
+                S_iwk, n_iw, _ = get_iwk_arr(S_iwk_list[i_var], nk**dim, dim, n_iw=n_iw)
                 iw_mesh = MeshImFreq(beta=1/T, S='Fermion', n_iw=n_iw)
                 k_mesh = lattice.e_k.mesh
                 iwk_mesh = MeshProduct(iw_mesh, k_mesh)
@@ -631,9 +644,9 @@ def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, S_iwk_list=None, method='
 
             elif method == 'matsubara_fft':
 
-                S_iwk, n_iw, _ = get_iwk_arr(S_iwk_list[i_var], nk**dim, dim)
-                
-                Q, invchi0_Q = compute_chi0_fft(lattice, mu, T, S_iwk, n_iw, nk, dim)
+                S_iwk, n_iw, _ = get_iwk_arr(S_iwk_list[i_var], nk**dim, dim, n_iw=n_iw)
+                Q, invchi0_Q = compute_chi0_fft(lattice, mu, T, S_iwk, n_iw, nk, n_iw_extr=n_iw_extr)
+
             else:
 
                 Q, invchi0_Q = get_min_invchi0(lattice, mu, beta=1/T, q_path=q_path, S_iwk=S_iwk_list[i_var], method=method, refine=refine, n_iw_extr=n_iw_extr)
