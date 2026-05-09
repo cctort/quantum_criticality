@@ -666,49 +666,61 @@ def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, n_iw=1, S_iwk_list=None, 
     results['Q'] = Q_avg / len(nk_list)
 
     if fit:
+        if not isinstance(fit_type, (list, np.ndarray)):
+            fit_type = [fit_type]
+
         pos_mask = results['invchi'] > 0
         x_fit = np.array(par_dict[list_label])[pos_mask][:15]
         y_fit = results['invchi'][pos_mask][:15]
-        if len(x_fit) >= 2:
-            try:
-                
-                par, cov = curve_fit(
-                    fit_type,
-                    x_fit,
-                    y_fit,
-                    p0=[1., 0.8, np.min(x_fit)*0.9],
-                    bounds = ([0., 0., -np.inf], [np.inf, np.inf, np.inf]),
-                    maxfev=10000
-                )
-                
-                ampl, gamma, Xc = par
 
-                results['ampl'] = ampl
-                results['gamma'] = gamma
-                results['Xc'] = Xc
+        for key in ['ampl', 'gamma', 'Xc', 'ampl_err', 'gamma_err', 'Xc_err', 'Qc']:
+            results[key] = []
 
-                results['ampl_err'] = np.sqrt(cov[0,0])
-                results['gamma_err'] = np.sqrt(cov[1,1])
-                results['Xc_err'] = np.sqrt(cov[2,2])
+        for fit in fit_type:
+            if len(x_fit) >= 2:
+                try:
+                    
+                    par, cov = curve_fit(
+                        fit,
+                        x_fit,
+                        y_fit,
+                        p0=[1., 0.8, np.min(x_fit)*0.9],
+                        bounds = ([0., 0., -np.inf], [np.inf, np.inf, np.inf]),
+                        maxfev=10000
+                    )
+                    
+                    ampl, gamma, Xc = par
 
-                Q_vals = results['Q'][pos_mask][:2]
-                mQ = (Q_vals[1] - Q_vals[0])/(x_fit[1] - x_fit[0])
-                results['Qc'] = Q_vals[0] - mQ * (x_fit[0] - results['Xc']) 
+                    results['ampl'].append(ampl)
+                    results['gamma'].append(gamma)
+                    results['Xc'].append(Xc)
 
-            except RuntimeError as e:
-                print(f"\nFit failed: {e}")
+                    results['ampl_err'].append(np.sqrt(cov[0,0]))
+                    results['gamma_err'].append(np.sqrt(cov[1,1]))
+                    results['Xc_err'].append(np.sqrt(cov[2,2]))
+
+                    Q_vals = results['Q'][pos_mask][:2]
+                    mQ = (Q_vals[1] - Q_vals[0])/(x_fit[1] - x_fit[0])
+                    results['Qc'].append(Q_vals[0] - mQ * (x_fit[0] - Xc))
+
+                except RuntimeError as e:
+                    print(f"\nFit failed: {e}")
+                    
+                    for key in ['Xc', 'gamma', 'ampl', 'Xc_err', 'gamma_err', 'ampl_err']:
+                        results[key].append(0.)
+                    
+                    results['Qc'].append(np.array([0.]*dim))
+            else:
+                print("\nFit skipped: fewer than 2 positive points")
                 
                 for key in ['Xc', 'gamma', 'ampl', 'Xc_err', 'gamma_err', 'ampl_err']:
-                    results[key] = 0.
-                
-                results['Qc'] = np.array([0.]*dim)
-        else:
-            print("\nFit skipped: fewer than 2 positive points")
-            
+                    results[key].append(0.)
+                    
+                results['Qc'].append(np.array([0.]*dim))
+
+        if len(fit_type) == 1:
             for key in ['Xc', 'gamma', 'ampl', 'Xc_err', 'gamma_err', 'ampl_err']:
-                results[key] = 0.
-                
-            results['Qc'] = np.array([0.]*dim)
+                results[key] = results[key][0]
 
     if save_file is not None:
         HDFwrite_dict(save_file, results)
