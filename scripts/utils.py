@@ -104,4 +104,4 @@ def critical2(x, a, b, c):
     return a * np.sign(x - c)*abs(x - c)**b
 
 def critical3(x, a, b, c, d):
-    return a * np.sign(x - c)*abs(x - c)**b + d
+    return a * x**b + c*x + d

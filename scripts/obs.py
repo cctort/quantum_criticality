@@ -8,7 +8,7 @@ from scripts.utils import *
 from scripts.lattice import *
 import time
 from scipy.optimize import curve_fit
-import numba as nb
+from scipy.optimize import root_scalar
 from numba import njit
 
 def get_A_iw0k(G_iwk, n_pade=60):
@@ -582,7 +582,7 @@ def get_mu(e_k, n_goal, beta, n_iw=1, S_iwk=None, dim=None):
     return np.nan
 
           
-def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, n_iw=1, S_iwk_list=None, method='lindhard', refine=True, nk_avg=(1,1), fit=False, fit_type=critical1, n_iw_extr=False, save_file=None, verbose=True):
+def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, n_iw=1, S_iwk_list=None, method='lindhard', refine=True, nk_avg=(1,1), fit=False, fit_type=critical1, fix_exp=None, n_iw_extr=False, save_file=None, verbose=True):
     """
     Run a 1D sweep of DMFT calculations over a list of tuples (T, U or n).
     """
@@ -683,19 +683,24 @@ def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, n_iw=1, S_iwk_list=None, 
                     
                     n_params = fit.__code__.co_argcount - 1
 
-                    if fit == critical1:
-                        p0 = [1., 1., np.min(y_fit)*0.9]
-                    elif fit == critical2:
-                        p0 = [1., 1., np.min(x_fit)*0.9]
+                    if fit == critical1 or fit == critical2:
+                        if fix_exp is not None:
+                            fit = lambda x, a, c: critical1(x, a, fix_exp, c),
                     elif fit == critical3:
-                        p0 = [1., 1., np.min(x_fit)*0.9, -np.min(y_fit)*0.9]
+                        fit = lambda x, a, c, d: critical3(x, a, fix_exp, c, d),
                     
-                    bounds = ([0., 0., -np.inf, -np.inf][:n_params], 
-                              [4., np.inf, np.inf, np.inf][:n_params])
+                    p0 = [1., 1., np.min(x_fit)*0.9]
+                    bounds = ([0., 0., -np.inf], [np.inf, np.inf, np.inf])
                     
                     par, cov = curve_fit(fit, x_fit, y_fit, p0=p0, bounds=bounds, maxfev=10000)
 
-                    par_labels = ['ampl', 'gamma', 'c', 'd']
+                    if fix_exp is None:
+                        par_labels = ['ampl', 'gamma', 'c', 'd']
+                    else:
+                        par_labels = ['ampl', 'c', 'd']
+                        results['gamma'].append(fix_exp)
+                        results['gamma_err'].append(0.)
+
                     for i in range(n_params):
                         results[par_labels[i]].append(par[i])
                         results[f'{par_labels[i]}_err'].append(np.sqrt(cov[i,i]))
@@ -703,20 +708,11 @@ def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, n_iw=1, S_iwk_list=None, 
                     if fit == critical1:
 
                         a, b, c = par
-
                         z = -c / a
                         Xc = np.sign(z) * np.abs(z)**(1/b)
 
-                        dX_dz = (1/b) * np.abs(z)**(1/b - 1)
-
-                        dz_da = c / a**2
-                        dz_dc = -1 / a
-
-                        grad = np.array([
-                            dX_dz * dz_da,
-                            Xc * (-np.log(np.abs(z)) / b**2),
-                            dX_dz * dz_dc
-                        ])
+                        dXc_dz = (1/b) * np.abs(z)**(1/b - 1)
+                        grad = np.array([-dXc_dz * z / a, Xc * (-np.log(np.abs(z)) / b**2), -dXc_dz / a])
 
                     elif fit == critical2:
 
@@ -727,26 +723,20 @@ def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, n_iw=1, S_iwk_list=None, 
 
                         a, b, c, d = par
 
-                        z = -d / a
+                        sol = root_scalar(critical3, args=(a, b, c, d), bracket=[-min(x_fit), min(x_fit)])
+                        Xc = sol.root
 
-                        # zero (only if valid)
-                        Xc = c + np.sign(z) * np.abs(z)**(1/b)
+                        denom = a * b * Xc**(b - 1) + c
 
-                        # derivatives
-                        absz = np.abs(z)
-
-                        dX_dz = (1/b) * absz**(1/b - 1)
-
-                        dz_da = d / a**2
-                        dz_dd = -1 / a
-
-                        dX_da = dX_dz * dz_da
-                        dX_dd = dX_dz * dz_dd
-
-                        dX_db = (Xc - c) * (-np.log(absz) / b**2)
-                        dX_dc = 1.0
+                        dX_da = -Xc**b / denom
+                        dX_db = -(a * Xc**b * np.log(np.abs(Xc))) / denom
+                        dX_dc = -Xc / denom
+                        dX_dd = -1.0 / denom
 
                         grad = np.array([dX_da, dX_db, dX_dc, dX_dd])
+
+                    if fix_exp is not None:
+                        grad.pop(1)
 
                     Xc_err = np.sqrt(grad @ cov @ grad)
 
