@@ -673,31 +673,80 @@ def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, n_iw=1, S_iwk_list=None, 
         x_fit = np.array(par_dict[list_label])[pos_mask][:15]
         y_fit = results['invchi'][pos_mask][:15]
 
-        for key in ['ampl', 'gamma', 'Xc', 'ampl_err', 'gamma_err', 'Xc_err', 'Qc']:
+
+        for key in ['ampl', 'gamma', 'c', 'd', 'Xc', 'Qc',
+                    'ampl_err', 'gamma_err', 'Xc_err', 'c_err', 'd_err']:
             results[key] = []
 
         for fit in fit_type:
             if len(x_fit) >= 2:
                 try:
                     
-                    par, cov = curve_fit(
-                        fit,
-                        x_fit,
-                        y_fit,
-                        p0=[1., 0.8, np.min(x_fit)*0.9],
-                        bounds = ([0., 0., -np.inf], [np.inf, np.inf, np.inf]),
-                        maxfev=10000
-                    )
+                    n_params = fit.__code__.co_argcount - 1
+
+                    p0 = [1., 0.8, np.min(x_fit)*0.9, 1e-5][:n_params]
+                    bounds = ([0., 0., -np.inf, -np.inf][:n_params], 
+                              [np.inf, np.inf, np.inf, np.inf][:n_params])
                     
-                    ampl, gamma, Xc = par
+                    par, cov = curve_fit(fit, x_fit, y_fit, p0=p0, bounds=bounds, maxfev=10000)
 
-                    results['ampl'].append(ampl)
-                    results['gamma'].append(gamma)
+                    par_labels = ['ampl', 'gamma', 'c', 'd']
+                    for i in range(n_params):
+                        results[par_labels[i]].append(par[i])
+                        results[f'{par_labels[i]}_err'].append(np.sqrt(cov[i,i]))
+
+                    if fit == critical1:
+
+                        a, b, c = par
+
+                        z = -c / a
+                        Xc = np.sign(z) * np.abs(z)**(1/b)
+
+                        dX_dz = (1/b) * np.abs(z)**(1/b - 1)
+
+                        dz_da = c / a**2
+                        dz_dc = -1 / a
+
+                        grad = np.array([
+                            dX_dz * dz_da,
+                            Xc * (-np.log(np.abs(z)) / b**2),
+                            dX_dz * dz_dc
+                        ])
+
+                    elif fit == critical2:
+
+                        Xc = par[2]
+                        grad = np.array([0., 0., 1.])
+
+                    elif fit == critical3:
+
+                        a, b, c, d = par
+
+                        z = -d / a
+
+                        # zero (only if valid)
+                        Xc = c + np.sign(z) * np.abs(z)**(1/b)
+
+                        # derivatives
+                        absz = np.abs(z)
+
+                        dX_dz = (1/b) * absz**(1/b - 1)
+
+                        dz_da = d / a**2
+                        dz_dd = -1 / a
+
+                        dX_da = dX_dz * dz_da
+                        dX_dd = dX_dz * dz_dd
+
+                        dX_db = (Xc - c) * (-np.log(absz) / b**2)
+                        dX_dc = 1.0
+
+                        grad = np.array([dX_da, dX_db, dX_dc, dX_dd])
+
+                    Xc_err = np.sqrt(grad @ cov @ grad)
+
                     results['Xc'].append(Xc)
-
-                    results['ampl_err'].append(np.sqrt(cov[0,0]))
-                    results['gamma_err'].append(np.sqrt(cov[1,1]))
-                    results['Xc_err'].append(np.sqrt(cov[2,2]))
+                    results['Xc_err'].append(Xc_err)
 
                     Q_vals = results['Q'][pos_mask][:2]
                     mQ = (Q_vals[1] - Q_vals[0])/(x_fit[1] - x_fit[0])

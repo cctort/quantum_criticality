@@ -98,7 +98,10 @@ def sweep_parallel(worker, sweep_list, save_file=None, n_jobs=-1):
     return results_list
 
 def critical1(x, a, b, c):
-    return a * x ** b - np.sign(c)*a * np.abs(c) **b
+    return a * x**b + c
 
 def critical2(x, a, b, c):
-    return a * np.sign(x - c)*np.abs(x - c)**b
+    return a * np.maximum(x - c, 0.)**b
+
+def critical3(x, a, b, c, d):
+    return a * np.maximum(x - c, 0.)**b + d
