@@ -303,40 +303,6 @@ def matsubara_sum(mu, beta, e_k, e_kq, S_iwk, S_iwkq):
             chi0 += G_iwk * G_iwkq
     return (-2.0 / beta * chi0).real / Nk
 
-def get_iwk_arr(S_val, Nk, dim, n_iw=1):
-    k_dep = False
-
-    if S_val is None or isinstance(S_val, (int, float, complex)):
-        val = 0j if S_val is None else complex(S_val)
-        # if caller wants n_iw > 1 with a constant sigma, broadcast over frequencies too
-        S_val = np.full((n_iw, 1), val, dtype=complex)
-
-    else:
-        S_val = np.asanyarray(S_val, dtype=complex)
-
-        if S_val.ndim == 1:
-            if len(S_val) == Nk:
-                # k-dependent, no frequency axis — replicate to n_iw if requested
-                S_val = np.tile(S_val[np.newaxis, :], (n_iw, 1))  # (n_iw, Nk)
-                k_dep = True
-            else:
-                # k-independent, frequency-dependent: (len,) → (len, 1)
-                # input length takes priority over n_iw
-                n_iw = len(S_val)
-                S_val = S_val[:, np.newaxis]                        # (n_iw, 1)
-
-        elif S_val.ndim == dim:
-            # k-dependent spatial array, no frequency axis
-            S_val = np.tile(S_val.reshape(1, Nk), (n_iw, 1))      # (n_iw, Nk)
-            k_dep = True
-
-        else:
-            # (n_iw', Nk) already — n_iw' takes priority
-            n_iw = S_val.shape[0]
-            k_dep = True
-
-    return S_val, n_iw, k_dep
-
 def compute_chi0_fft(lattice, mu, T, S_iwk, n_iw, nk, n_iw_extr=False):
 
     beta = 1.0 / T
@@ -389,6 +355,40 @@ def compute_chi0_fft(lattice, mu, T, S_iwk, n_iw, nk, n_iw_extr=False):
         invchi0_Q = coeff[-1]  # extrapolated value at 1/n_iw → 0
 
     return Q, invchi0_Q
+
+def get_iwk_arr(S_val, Nk, dim, n_iw=1):
+    k_dep = False
+
+    if S_val is None or isinstance(S_val, (int, float, complex)):
+        val = 0j if S_val is None else complex(S_val)
+        # if caller wants n_iw > 1 with a constant sigma, broadcast over frequencies too
+        S_val = np.full((n_iw, 1), val, dtype=complex)
+
+    else:
+        S_val = np.asanyarray(S_val, dtype=complex)
+
+        if S_val.ndim == 1:
+            if len(S_val) == Nk:
+                # k-dependent, no frequency axis — replicate to n_iw if requested
+                S_val = np.tile(S_val[np.newaxis, :], (n_iw, 1))  # (n_iw, Nk)
+                k_dep = True
+            else:
+                # k-independent, frequency-dependent: (len,) → (len, 1)
+                # input length takes priority over n_iw
+                n_iw = len(S_val)
+                S_val = S_val[:, np.newaxis]                        # (n_iw, 1)
+
+        elif S_val.ndim == dim:
+            # k-dependent spatial array, no frequency axis
+            S_val = np.tile(S_val.reshape(1, Nk), (n_iw, 1))      # (n_iw, Nk)
+            k_dep = True
+
+        else:
+            # (n_iw', Nk) already — n_iw' takes priority
+            n_iw = S_val.shape[0]
+            k_dep = True
+
+    return S_val, n_iw, k_dep
 
 def get_min_invchi0(lattice, mu, beta, q_path=None, method='lindhard', n_iw=1, S_iwk=None, refine=True, n_iw_extr=False):
 
@@ -649,7 +649,7 @@ def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, n_iw=1, S_iwk_list=None, 
 
             else:
 
-                Q, invchi0_Q = get_min_invchi0(lattice, mu, beta=1/T, q_path=q_path, S_iwk=S_iwk_list[i_var], method=method, refine=refine, n_iw_extr=n_iw_extr)
+                Q, invchi0_Q = get_min_invchi0(lattice, mu, beta=1/T, q_path=q_path, S_iwk=S_iwk_list[i_var], method=method, n_iw=n_iw, refine=refine, n_iw_extr=n_iw_extr)
 
             # Results for each U,T,n point
             invchi0_avg[i_var] += invchi0_Q.real
@@ -673,7 +673,6 @@ def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, n_iw=1, S_iwk_list=None, 
         x_fit = np.array(par_dict[list_label])[pos_mask][:15]
         y_fit = results['invchi'][pos_mask][:15]
 
-
         for key in ['ampl', 'gamma', 'c', 'd', 'Xc', 'Qc',
                     'ampl_err', 'gamma_err', 'Xc_err', 'c_err', 'd_err']:
             results[key] = []
@@ -684,9 +683,15 @@ def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, n_iw=1, S_iwk_list=None, 
                     
                     n_params = fit.__code__.co_argcount - 1
 
-                    p0 = [1., 0.8, np.min(x_fit)*0.9, 1e-5][:n_params]
+                    if fit == critical1:
+                        p0 = [1., 1., np.min(y_fit)*0.9]
+                    elif fit == critical2:
+                        p0 = [1., 1., np.min(x_fit)*0.9]
+                    elif fit == critical3:
+                        p0 = [1., 1., np.min(x_fit)*0.9, -np.min(y_fit)*0.9]
+                    
                     bounds = ([0., 0., -np.inf, -np.inf][:n_params], 
-                              [np.inf, np.inf, np.inf, np.inf][:n_params])
+                              [4., np.inf, np.inf, np.inf][:n_params])
                     
                     par, cov = curve_fit(fit, x_fit, y_fit, p0=p0, bounds=bounds, maxfev=10000)
 

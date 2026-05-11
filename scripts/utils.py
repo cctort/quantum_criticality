@@ -101,7 +101,7 @@ def critical1(x, a, b, c):
     return a * x**b + c
 
 def critical2(x, a, b, c):
-    return a * np.maximum(x - c, 0.)**b
+    return a * np.sign(x - c)*abs(x - c)**b
 
 def critical3(x, a, b, c, d):
-    return a * np.maximum(x - c, 0.)**b + d
+    return a * np.sign(x - c)*abs(x - c)**b + d
