@@ -3,7 +3,7 @@ from triqs.gf import GfImFreq, GfReFreq, MeshReFreq
 from triqs_tprf.lattice_utils import imtime_bubble_chi0_wk
 from triqs_tprf.lattice import lattice_dyson_g0_wk, lattice_dyson_g_wk, lindhard_chi00
 from scipy.optimize import brentq
-from scipy.optimize import minimize_scalar
+from scipy.optimize import minimize_scalar, minimize
 from scripts.utils import *
 from scripts.lattice import *
 import time
@@ -13,19 +13,19 @@ from numba import njit
 
 def get_A_iw0k(G_iwk, n_pade=60):
 
-    N_iw = G_iwk.data.shape[0]
+    niw = G_iwk.data.shape[0]
     N_k  = G_iwk.data.shape[1]
 
     beta = G_iwk.mesh.components[0].beta
-    n_iw = N_iw // 2
+    niw = niw // 2
 
     G_iw = GfImFreq(beta=beta, statistic='Fermion',
-                    n_points=n_iw, target_shape=[1, 1])
+                    n_points=niw, target_shape=[1, 1])
 
     w_mesh = MeshReFreq(w_min=0.0, w_max=0.0, n_w=1)
     G_w = GfReFreq(mesh=w_mesh, target_shape=[1, 1])
 
-    n_pade = min(n_pade, n_iw)
+    n_pade = min(n_pade, niw)
 
     A_k = np.empty(N_k)
 
@@ -38,16 +38,16 @@ def get_A_iw0k(G_iwk, n_pade=60):
 
     return A_k
 
-def get_Z(S_iw_data, beta, n_iw):
+def get_Z(S_iw_data, beta, niw):
     """
     Evaluate quasi-particle weight Z, scattering rate gamma, and lifetime tau from self-energy.
     """
     
-    n = np.arange(n_iw)
+    n = np.arange(niw)
     iw = (2*n + 1) * np.pi / beta
 
     iw0 = iw[0]
-    S0 = S_iw_data[n_iw].imag
+    S0 = S_iw_data[niw].imag
 
     Z = 1. / (1. - S0 / iw0)
     gamma = -Z * S0
@@ -62,8 +62,8 @@ def get_invchi0(mu, e_k, iw_mesh, verbose=False, save_memory=False):
     
     #G0_iwk = lattice_dyson_g0_wk(mu, e_k, iw_mesh)
 
-    n_iw = len(iw_mesh)
-    #chi0_iwk = imtime_bubble_chi0_wk(G0_iwk, nw=n_iw, verbose=verbose, save_memory=save_memory)
+    niw = len(iw_mesh)
+    #chi0_iwk = imtime_bubble_chi0_wk(G0_iwk, nw=niw, verbose=verbose, save_memory=save_memory)
     chi0_iwk = lindhard_chi00(e_k=e_k, mesh=iw_mesh, mu=mu)
     chi0_iwk.data[...] = 1. / chi0_iwk.data
 
@@ -76,16 +76,16 @@ def get_invchi0_fromSiw(mu, e_k, S_iw, verbose=False):
     
     G0_iwk = lattice_dyson_g_wk(mu, e_k, S_iw)
 
-    n_iw = len(S_iw.data[:,0,0])
-    chi0_iwk = imtime_bubble_chi0_wk(G0_iwk, nw=n_iw, verbose=verbose)
+    niw = len(S_iw.data[:,0,0])
+    chi0_iwk = imtime_bubble_chi0_wk(G0_iwk, nw=niw, verbose=verbose)
     chi0_iwk.data[...] = 1. / chi0_iwk.data
 
     return chi0_iwk
 
 #def get_invchi0_dressed(mu, eps_k, method='bare', iw_mesh=None, S_iw=None, verbose=False):
-    #n_iw = len(S_iw.mesh)
+    #niw = len(S_iw.mesh)
     #G_iwk = lattice_dyson_g_wk(mu, eps_k, S_iw)
-    #chi0_iwk = imtime_bubble_chi0_wk(G_iwk, nw=n_iw, verbose=verbose)
+    #chi0_iwk = imtime_bubble_chi0_wk(G_iwk, nw=niw, verbose=verbose)
 
 @njit
 def blochl_weights(e, mu):
@@ -210,7 +210,7 @@ def cexp(z):
     return ezr * np.cos(zi) + 1j * ezr * np.sin(zi)
 
 @njit
-def lindhard2(mu, beta, e_k, e_kq, S_k, S_kq):
+def lindhard_ksp(mu, beta, e_k, e_kq, S_k, S_kq):
 
     Nk = len(e_k)
     chi0_sum = 0.0
@@ -251,48 +251,8 @@ def lindhard2(mu, beta, e_k, e_kq, S_k, S_kq):
     return chi0_sum.real / Nk
 
 @njit
-def lindhard(mu, beta, e_k, e_kq, S_k, S_kq):
-
-    Nk = len(e_k)
-    chi0_sum = 0.0
-
-    for k in range(Nk):
-        
-        e_k_eff = e_k[k] + S_k[k].real
-        e_kq_eff = e_kq[k] + S_kq[k].real
-        Gamma_k = - S_k[k].imag
-        Gamma_kq = - S_kq[k].imag
-
-        xk = beta * (e_k_eff + 1j*Gamma_k - mu)
-        xkq = beta * (e_kq_eff + 1j*Gamma_kq - mu)
-
-        if xk.real > 500.0:
-            nF_k = 0.0 + 0.0j
-        elif xk.real < -500.0:
-            nF_k = 1.0 + 0.0j
-        else:
-            nF_k = 1.0 / (cexp(xk) + 1.0)
-
-        if xkq.real > 500.0:
-            nF_kq = 0.0 + 0.0j
-        elif xkq.real < -500.0:
-            nF_kq = 1.0 + 0.0j
-        else:
-            nF_kq = 1.0 / (cexp(xkq) + 1.0)
-
-        de = (e_k_eff - e_kq_eff) - 1j*(Gamma_k - Gamma_kq)
-
-        if abs(de) < 1e-8:
-            chi0 = - beta * nF_k * (1.0 - nF_k)
-        else:
-            chi0 = - (nF_k - nF_kq) / de
-
-        chi0_sum += chi0
-
-    return chi0_sum.real / Nk
-
-@njit
-def matsubara_sum(mu, beta, e_k, e_kq, S_iwk, S_iwkq):
+def matsubara_ksp(mu, beta, e_k, e_kq, S_iwk, S_iwkq):
+    
     Nk = len(e_k)
     chi0 = 0.0 + 0.0j
     for n in range(len(S_iwk)):
@@ -301,188 +261,210 @@ def matsubara_sum(mu, beta, e_k, e_kq, S_iwk, S_iwkq):
             G_iwk  = 1.0 / (iw + mu - e_k[k] - S_iwk[n,k])
             G_iwkq = 1.0 / (iw + mu - e_kq[k] - S_iwkq[n,k])
             chi0 += G_iwk * G_iwkq
+
     return (-2.0 / beta * chi0).real / Nk
 
-def compute_chi0_fft(lattice, mu, T, S_iwk, n_iw, nk, n_iw_extr=False):
+def matsubara_rsp(mu, beta, e_k, S_iwk, nk, niw):
 
-    beta = 1.0 / T
-    e_k  = lattice.e_k.data[:, 0, 0].real.reshape(nk, nk, nk)
-    has_sigma = not np.allclose(S_iwk, 0)
+    ek_mesh = e_k.reshape(nk,nk,nk)
+    clean = np.allclose(S_iwk, 0)
 
-    def _run(n_iw_run):
-        iw_n  = (2*np.arange(n_iw_run) + 1) * np.pi / beta
-        chi0_r = np.zeros((nk, nk, nk), dtype=np.complex128)
-        G_r    = np.zeros((nk, nk, nk), dtype=np.complex128)
+    iw_n  = (2*np.arange(niw) + 1) * np.pi / beta
+    chi0_r = np.zeros((nk,nk,nk), dtype=np.complex128)
+    G_r    = np.zeros((nk,nk,nk), dtype=np.complex128)
 
-        for n in range(n_iw_run):
-            if has_sigma:
-                sig = S_iwk[n, 0] if S_iwk.shape[1] == 1 else S_iwk[n].reshape(nk, nk, nk)
-            else:
-                sig = 0.0
 
-            G_k = 1.0 / (1j*iw_n[n] + mu - e_k - sig)
-            np.fft.ifftn(G_k, out=G_r)
-            del G_k
+    for n in range(niw):
+        if not clean:
+            S_val = S_iwk[n, 0] if S_iwk.shape[1] == 1 else S_iwk[n].reshape(nk,nk,nk)
+        else:
+            S_val = 0.0
 
-            chi0_r.real += G_r.real * G_r.real - G_r.imag * G_r.imag
-            chi0_r.imag += 2.0 * G_r.real * G_r.imag
+        G_k = 1.0 / (1j*iw_n[n] + mu - ek_mesh - S_val)
+        np.fft.ifftn(G_k, out=G_r)
+        del G_k
 
-        chi0_q = np.fft.fftn(chi0_r)
-        chi0_q *= -2.0 / beta
-        invchi0_mesh = chi0_q.real.copy()
-        np.reciprocal(invchi0_mesh, out=invchi0_mesh)
-        return invchi0_mesh
+        chi0_r.real += G_r.real * G_r.real - G_r.imag * G_r.imag
+        chi0_r.imag += 2.0 * G_r.real * G_r.imag
 
-    invchi0_mesh = _run(n_iw)
-    min_idx   = np.unravel_index(np.argmin(invchi0_mesh), invchi0_mesh.shape)
-    Q         = np.sort(1 - np.abs(2*np.array(min_idx)/nk - 1))[::-1]
-    invchi0_Q = invchi0_mesh[min_idx]
+    chi0_q = np.fft.fftn(chi0_r)
+    chi0_q *= -2.0 / beta
+    invchi0_mesh = chi0_q.real.copy()
+    np.reciprocal(invchi0_mesh, out=invchi0_mesh)
+    
+    return invchi0_mesh.reshape(-1)
 
-    if n_iw_extr:
-        # same subsampling scheme as get_min_invchi0
-        n_iw_list      = [n_iw]
-        invchi0_Q_list = [invchi0_Q]
+def niw_extrapolate(invchi0_func, niw, deg=2):
 
-        for s in [2, 3, 4]:
-            n_sub = n_iw // s
-            if n_sub < 4:
-                break
-            mesh_sub  = _run(n_sub)
-            invchi0_Q_list.append(mesh_sub[min_idx])  # same q-point as full run
-            n_iw_list.append(n_sub)
+    invchi0_list, niw_list = [], []
+    for s in [1, 2, 3, 4]:
+        n_sub = niw // s
+        if n_sub < 4:
+            break
 
-        coeff     = np.polyfit(1./np.array(n_iw_list), invchi0_Q_list, 2)
-        invchi0_Q = coeff[-1]  # extrapolated value at 1/n_iw → 0
+        mesh_sub = np.asarray(invchi0_func(n_sub))
 
-    return Q, invchi0_Q
+        invchi0_list.append(mesh_sub)
+        niw_list.append(n_sub)
 
-def get_iwk_arr(S_val, Nk, dim, n_iw=1):
+    x = 1.0 / np.array(niw_list)
+    y = np.stack(invchi0_list, axis=0)
+
+    coeff = np.polyfit(x, y, deg=deg)
+    invchi0_mesh = coeff[-1].squeeze()
+
+    return invchi0_mesh
+
+def get_iwk_arr(S_val, Nk, dim, niw=1):
     k_dep = False
 
     if S_val is None or isinstance(S_val, (int, float, complex)):
         val = 0j if S_val is None else complex(S_val)
-        # if caller wants n_iw > 1 with a constant sigma, broadcast over frequencies too
-        S_val = np.full((n_iw, 1), val, dtype=complex)
+        # if caller wants niw > 1 with a constant sigma, broadcast over frequencies too
+        S_val = np.full((niw, 1), val, dtype=complex)
 
     else:
         S_val = np.asanyarray(S_val, dtype=complex)
 
         if S_val.ndim == 1:
             if len(S_val) == Nk:
-                # k-dependent, no frequency axis — replicate to n_iw if requested
-                S_val = np.tile(S_val[np.newaxis, :], (n_iw, 1))  # (n_iw, Nk)
+                # k-dependent, no frequency axis — replicate to niw if requested
+                S_val = np.tile(S_val[np.newaxis, :], (niw, 1))  # (niw, Nk)
                 k_dep = True
             else:
                 # k-independent, frequency-dependent: (len,) → (len, 1)
-                # input length takes priority over n_iw
-                n_iw = len(S_val)
-                S_val = S_val[:, np.newaxis]                        # (n_iw, 1)
+                # input length takes priority over niw
+                niw = len(S_val)
+                S_val = S_val[:, np.newaxis]                        # (niw, 1)
 
         elif S_val.ndim == dim:
             # k-dependent spatial array, no frequency axis
-            S_val = np.tile(S_val.reshape(1, Nk), (n_iw, 1))      # (n_iw, Nk)
+            S_val = np.tile(S_val.reshape(1, Nk), (niw, 1))      # (niw, Nk)
             k_dep = True
 
         else:
-            # (n_iw', Nk) already — n_iw' takes priority
-            n_iw = S_val.shape[0]
+            # (niw', Nk) already — niw' takes priority
+            niw = S_val.shape[0]
             k_dep = True
 
-    return S_val, n_iw, k_dep
+    return S_val, niw, k_dep
 
-def get_min_invchi0(lattice, mu, beta, q_path=None, method='lindhard', n_iw=1, S_iwk=None, refine=True, n_iw_extr=False):
+def expand(S, Nk):
+    return S if S.shape[1] > 1 else np.tile(S, (1, Nk))
+
+def get_invchi0_min(lattice, mu, beta, q_path=None, method='lindhard', niw=1, S_iwk=None, refine=True, niw_extr=False):
 
     nk = lattice.nk
     dim = lattice.dim
+    e_k = lattice.e_k.data[:,0,0].real
+    Nk = len(e_k)
 
-    S_iwk, n_iw, k_dep = get_iwk_arr(S_iwk, nk**dim, dim, n_iw)
+    S_iwk, niw, k_dep = get_iwk_arr(S_iwk, nk**dim, dim, niw)
 
-    def expand(S, Nk):
-        """Tile only if k-independent, and only to the path length Nk."""
-        return S if S.shape[1] > 1 else np.tile(S, (1, Nk))
+    whole_bz = False
+    if q_path is None:
+        _, q_path = lattice.get_k_mesh(nk)
+        q_path /= np.pi
+        whole_bz = True
 
-    invchi_grid = []
-    for q in q_path:
-        e_k, e_kq = lattice.get_e_kq(q, 'coarse')
+    if method == 'lindhard':
+        invchi0_mesh = []
+        for q in q_path:
+            e_kq = lattice.get_e_kq(e_k, q)
 
-        if k_dep:
-            S_iwkq = lattice.get_f_iwkq(S_iwk, q, 'coarse')
+            if k_dep:
+                S_iwkq = lattice.get_f_iwkq(S_iwk, q)
+            else:
+                S_iwkq = S_iwk
+
+            S_k  = expand(S_iwk,  Nk)
+            S_kq = expand(S_iwkq, Nk)
+
+            invchi0_mesh.append(1/lindhard_ksp(mu, beta, e_k, e_kq, S_k[0], S_kq[0]))
+            
+    elif method == 'matsubara':
+
+        if niw_extr:
+            invchi0_func = lambda niw: matsubara_rsp(mu, beta, e_k, S_iwk, nk, niw)
+            invchi0_mesh = niw_extrapolate(invchi0_func, niw)
+
         else:
-            S_iwkq = S_iwk
+            invchi0_mesh = matsubara_rsp(mu, beta, e_k, S_iwk, nk, niw)
+    
+    idx = np.argmin(invchi0_mesh)
+    q_min = q_path[idx]
+    invchi0_min = invchi0_mesh[idx]
 
-        S_k  = expand(S_iwk,  len(e_k))
-        S_kq = expand(S_iwkq, len(e_kq))
-
-        if method == 'lindhard':
-            invchi_grid.append(1/lindhard(mu, beta, e_k, e_kq, S_k[0], S_kq[0]))
-        elif method == 'lindhard2':
-            invchi_grid.append(1/lindhard2(mu, beta, e_k, e_kq, S_k[0], S_kq[0]))
-        elif method == 'matsubara':
-            invchi_grid.append(1/matsubara_sum(mu, beta, e_k, e_kq, S_k, S_kq))
-
-    idx = np.argmin(invchi_grid)
-    best_q = q_path[idx]
-    invchi0_min = invchi_grid[idx]
-
-    if refine and q_path is not None:
-
-        start = q_path[0]
-        end   = q_path[-1]
-        step  = 1 / (len(q_path) - 1)
-
+    if refine:
         if k_dep:
             S_iwR = lattice.get_f_iwR(S_iwk)
 
-        def invchi0(s, S_iwk_arg):
-
-            q = start + s * (end - start)
-            e_k, e_kq = lattice.get_e_kq(q, 'fine')
-
+        def invchi0_q_func(s, S_iwk_arg):
+            q = start + J @ np.atleast_1d(s)
+            e_kq = lattice.get_e_kq(e_k, q, 'fine')
             if k_dep:
                 S_iwkq = lattice.get_f_iwkq(S_iwk_arg, q, 'fine', S_iwR)
             else:
                 S_iwkq = S_iwk_arg
+            S_k  = expand(S_iwk_arg, Nk)
+            S_kq = expand(S_iwkq, Nk)
+            return 1 / lindhard_ksp(mu, beta, e_k, e_kq, S_k[0], S_kq[0])
 
-            S_k  = expand(S_iwk_arg, len(e_k))
-            S_kq = expand(S_iwkq,    len(e_kq))
+        if whole_bz is False:
+            start  = q_path[0]
+            end    = q_path[-1]
+            J      = (end - start).reshape(-1, 1)
+            step   = 1 / (len(q_path) - 1)
+            s0     = idx / (len(q_path) - 1)
 
-            if method == 'lindhard':
-                return 1/lindhard(mu, beta, e_k, e_kq, S_k[0], S_kq[0])
-            elif method == 'lindhard2':
-                return 1/lindhard2(mu, beta, e_k, e_kq, S_k[0], S_kq[0])
-            elif method == 'matsubara':
-                return 1/matsubara_sum(mu, beta, e_k, e_kq, S_k, S_kq)
+            res = minimize_scalar(
+                invchi0_q_func,
+                method='bounded',
+                bounds=(max(0, s0 - 5*step), min(1, s0 + 5*step)),
+                args=(S_iwk,)
+            )
+            s_min = np.array([res.x])
 
-        s0 = idx / (len(q_path) - 1)
-        res = minimize_scalar(invchi0, method='bounded',
-                              bounds=(max(0, s0 - 5*step), min(1, s0 + 5*step)),
-                              args=(S_iwk,))
+        else:
+            
+            grid_shape = (nk,) * dim
+            idx_nd     = np.unravel_index(idx, grid_shape)
 
-        s_min = res.x
-        best_q = start + s_min * (end - start)
-        invchi0_min = invchi0(s_min, S_iwk)
-    
-    if n_iw_extr and method != 'lindhard':
+            start = q_path[0]
+            J     = np.zeros((lattice.dim, dim))
+            for d in range(dim):
+                idx1    = [0] * dim
+                idx1[d] = 1
+                J[:, d] = q_path[np.ravel_multi_index(idx1, grid_shape)] - start
+
+            s0    = np.array(idx_nd, dtype=float)
+            step  = 1.0
+            bounds = [(max(0, s0[d] - step), min(nk - 1, s0[d] + step)) for d in range(dim)]
+
+            res = minimize(
+                invchi0_q_func,
+                x0=s0,
+                args=(S_iwk,),
+                method='L-BFGS-B',
+                bounds=bounds,
+                options={
+                    'ftol': 1e-8,
+                    'gtol': 1e-6,
+                    'maxiter': 500,
+                }
+            )
+            s_min = res.x
+
+        q_min       = start + J @ s_min
+        invchi0_min = invchi0_q_func(s_min, S_iwk)
         
-        n_iw_list = [n_iw]
-        invchi0_min_list = [invchi0_min]
+    q_min = np.sort(1-np.abs(q_min-1))[::-1]
 
-        subs = [2, 3, 4]
-
-        for s in subs:
-
-            n_sub = n_iw//s
-            n_iw_list.append(n_sub)
-            invchi0_min_list.append(invchi0(s_min, S_iwk[:n_sub//2]))
-
-        coeff = np.polyfit(1./np.array(n_iw_list), invchi0_min_list, 2)
-        invchi0_min = coeff[-1]
-
-    return best_q, invchi0_min
+    return q_min, invchi0_min, invchi0_mesh
 
 @njit
 def _density_iw(eps, S_iwk, mu, beta):
-    n_iw, Nk = S_iwk.shape
+    niw, Nk = S_iwk.shape
     n_tot = 0.0
 
     for k in range(Nk):
@@ -492,7 +474,7 @@ def _density_iw(eps, S_iwk, mu, beta):
         g_sum = 0.0
         g0_sum = 0.0
 
-        for n in range(n_iw):
+        for n in range(niw):
             w = (2*n + 1) * np.pi / beta
             Sigma = S_iwk[n, k]
 
@@ -535,10 +517,10 @@ def _density_static(eps, Phi, Gamma, mu, beta):
     return np.mean(2.0 * nF_real)
 
 
-def get_mu(e_k, n_goal, beta, n_iw=1, S_iwk=None, dim=None):
+def get_mu(e_k, n_goal, beta, niw=1, S_iwk=None, dim=None):
 
     eps = e_k.data[:, 0, 0].real.flatten()
-    S_iwk, n_iw, _ = get_iwk_arr(S_iwk, Nk=len(eps), dim=dim, n_iw=n_iw)
+    S_iwk, niw, _ = get_iwk_arr(S_iwk, Nk=len(eps), dim=dim, niw=niw)
 
     # detect frequency independence
     freq_indep = np.allclose(S_iwk, S_iwk[0:1, :])
@@ -582,7 +564,7 @@ def get_mu(e_k, n_goal, beta, n_iw=1, S_iwk=None, dim=None):
     return np.nan
 
           
-def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, n_iw=1, S_iwk_list=None, method='lindhard', refine=True, nk_avg=(1,1), fit=False, fit_type=critical1, fix_exp=None, n_iw_extr=False, save_file=None, verbose=True):
+def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, niw=1, S_iwk_list=None, q_path=None, method='matsubara', refine=True, nk_avg=(1,1), fit=False, fit_type=critical1, fix_exp=None, niw_extr=False, save_file=None, verbose=True):
     """
     Run a 1D sweep of DMFT calculations over a list of tuples (T, U or n).
     """
@@ -600,8 +582,8 @@ def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, n_iw=1, S_iwk_list=None, 
         S_iwk_list = [S_iwk_list] * len(par_dict[list_label])
     
     # Sweep initialization
-    results = {'t': lattice.t, 'dim': lattice.dim, 'nk': nk, 'n_iw': n_iw,
-               'S_iwk_list': S_iwk_list, 'refine': refine, 'n_iw_extr': n_iw_extr,
+    results = {'t': lattice.t, 'dim': lattice.dim, 'nk': nk, 'niw': niw,
+               'S_iwk_list': S_iwk_list, 'refine': refine, 'niw_extr': niw_extr,
                'invchi': [],  'Q': [], 'par_list': []}
 
     nk_list = [nk - i*nk_avg[1] for i in range(nk_avg[0])]
@@ -614,7 +596,10 @@ def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, n_iw=1, S_iwk_list=None, 
         if refine:
             lattice.get_phase_k(nk_val)
 
-        q_path = np.array([[1.,1.,qz] for qz in np.linspace(0.,1.,nk_val//2+1)])
+        if q_path is not None:
+            start = q_path[0]
+            stop = q_path[-1]
+            q_path = np.linspace(start, stop, nk_val//2+1) # wouldn't work anyway for other paths other then Gamma -> M
         
         # Parameter sweep
         for i_var, var in enumerate(par_dict[list_label]):
@@ -625,14 +610,13 @@ def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, n_iw=1, S_iwk_list=None, 
             mu = get_mu(e_k=lattice.e_k, n_goal=n, beta=1/T, S_iwk=S_iwk_list[i_var])
             
             if method == 'matsubara_tprf':
-
-                S_iwk, n_iw, _ = get_iwk_arr(S_iwk_list[i_var], nk**dim, dim, n_iw=n_iw)
-                iw_mesh = MeshImFreq(beta=1/T, S='Fermion', n_iw=n_iw)
+                S_iwk, niw, _ = get_iwk_arr(S_iwk_list[i_var], nk**dim, dim, niw=niw)
+                iw_mesh = MeshImFreq(beta=1/T, S='Fermion', niw=niw)
                 k_mesh = lattice.e_k.mesh
                 iwk_mesh = MeshProduct(iw_mesh, k_mesh)
                 S_iwk_gf = Gf(mesh=iwk_mesh, target_shape=[1,1])
-                S_iwk_gf.data[:n_iw,:,0,0] = S_iwk[::-1].conj()
-                S_iwk_gf.data[n_iw:,:,0,0] = S_iwk
+                S_iwk_gf.data[:niw,:,0,0] = S_iwk[::-1].conj()
+                S_iwk_gf.data[niw:,:,0,0] = S_iwk
 
                 G_iwk = lattice_dyson_g_wk(mu, lattice.e_k, S_iwk_gf)
                 chi0 = imtime_bubble_chi0_wk(G_iwk, nw=1, verbose=False, save_memory=True)
@@ -642,14 +626,8 @@ def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, n_iw=1, S_iwk_list=None, 
                 Q = np.sort(1-np.abs(2*np.array(min_idx) / nk-1))[::-1]
                 invchi0_Q = invchi0_mesh[min_idx]
 
-            elif method == 'matsubara_fft':
-
-                S_iwk, n_iw, _ = get_iwk_arr(S_iwk_list[i_var], nk**dim, dim, n_iw=n_iw)
-                Q, invchi0_Q = compute_chi0_fft(lattice, mu, T, S_iwk, n_iw, nk, n_iw_extr=n_iw_extr)
-
             else:
-
-                Q, invchi0_Q = get_min_invchi0(lattice, mu, beta=1/T, q_path=q_path, S_iwk=S_iwk_list[i_var], method=method, n_iw=n_iw, refine=refine, n_iw_extr=n_iw_extr)
+                Q, invchi0_Q, _ = get_invchi0_min(lattice, mu, beta=1/T, q_path=q_path, S_iwk=S_iwk_list[i_var], method=method, niw=niw, refine=refine, niw_extr=niw_extr)
 
             # Results for each U,T,n point
             invchi0_avg[i_var] += invchi0_Q.real
@@ -668,6 +646,10 @@ def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, n_iw=1, S_iwk_list=None, 
     if fit:
         if not isinstance(fit_type, (list, np.ndarray)):
             fit_type = [fit_type]
+            fix_exp = [fix_exp]
+        else:
+            if fix_exp is None:
+                fix_exp = [None]*len(fit_type)
 
         pos_mask = results['invchi'] > 0
         x_fit = np.array(par_dict[list_label])[pos_mask][:15]
@@ -677,42 +659,82 @@ def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, n_iw=1, S_iwk_list=None, 
                     'ampl_err', 'gamma_err', 'Xc_err', 'c_err', 'd_err']:
             results[key] = []
 
-        for fit in fit_type:
+        for i_fit, fit in enumerate(fit_type):
             if len(x_fit) >= 2:
                 try:
                     
-                    n_params = fit.__code__.co_argcount - 1
-
-                    if fit == critical1 or fit == critical2:
-                        if fix_exp is not None:
-                            fit = lambda x, a, c: critical1(x, a, fix_exp, c),
-                    elif fit == critical3:
-                        fit = lambda x, a, c, d: critical3(x, a, fix_exp, c, d),
-                    
-                    p0 = [1., 1., np.min(x_fit)*0.9]
-                    bounds = ([0., 0., -np.inf], [np.inf, np.inf, np.inf])
-                    
-                    par, cov = curve_fit(fit, x_fit, y_fit, p0=p0, bounds=bounds, maxfev=10000)
-
-                    if fix_exp is None:
+                    if fit == critical3:
+                        p0 = [1., 1., np.min(y_fit) * 0.9, 0.1]
+                        bounds = ([0., 0., -np.inf, 1e-12],
+                                [np.inf, np.inf, np.inf, 1.])
                         par_labels = ['ampl', 'gamma', 'c', 'd']
                     else:
-                        par_labels = ['ampl', 'c', 'd']
-                        results['gamma'].append(fix_exp)
-                        results['gamma_err'].append(0.)
+                        p0 = [1., 1., np.min(x_fit) * 0.9]
+                        bounds = ([0., 0., -np.inf],
+                                [np.inf, np.inf, np.inf])
+                        par_labels = ['ampl', 'gamma', 'c']
 
-                    for i in range(n_params):
-                        results[par_labels[i]].append(par[i])
-                        results[f'{par_labels[i]}_err'].append(np.sqrt(cov[i,i]))
+                    fit_new = fit
+
+                    if fit == critical3 and fix_exp[i_fit] is not None:
+
+                        gamma_fix = fix_exp[i_fit]
+
+                        fit_new = lambda x, a, c, d: critical3(x, a, gamma_fix, c, d)
+
+                        p0.pop(1)
+
+                        bounds = (list(bounds[0]), list(bounds[1]))
+                        bounds[0].pop(1)
+                        bounds[1].pop(1)
+
+                    par_fit, cov_fit = curve_fit(
+                        fit_new,
+                        x_fit,
+                        y_fit,
+                        p0=p0,
+                        bounds=bounds,
+                        maxfev=100000
+                    )
+
+                    par = par_fit
+                    cov = cov_fit
+
+                    if fit == critical3 and fix_exp[i_fit] is not None:
+
+                        par = np.insert(par_fit, 1, gamma_fix)
+
+                        cov_full = np.zeros((len(par), len(par)))
+                        mask = [i for i in range(len(par)) if i != 1]
+
+                        for i_old, i_new in enumerate(mask):
+                            for j_old, j_new in enumerate(mask):
+                                cov_full[i_new, j_new] = cov_fit[i_old, j_old]
+
+                        cov = cov_full
+
+                    for i, label in enumerate(par_labels):
+
+                        results[label].append(par[i])
+
+                        err = 0. if (fit == critical3 and fix_exp[i_fit] is not None and i == 1) else np.sqrt(cov[i, i])
+
+                        results[f'{label}_err'].append(err)
 
                     if fit == critical1:
 
                         a, b, c = par
-                        z = -c / a
-                        Xc = np.sign(z) * np.abs(z)**(1/b)
 
-                        dXc_dz = (1/b) * np.abs(z)**(1/b - 1)
-                        grad = np.array([-dXc_dz * z / a, Xc * (-np.log(np.abs(z)) / b**2), -dXc_dz / a])
+                        z = -c / a
+                        Xc = np.sign(z) * np.abs(z)**(1 / b)
+
+                        dXc_dz = (1 / b) * np.abs(z)**(1 / b - 1)
+
+                        grad = np.array([
+                            -dXc_dz * z / a,
+                            -Xc * np.log(np.abs(z) + 1e-15) / b**2,
+                            -dXc_dz / a
+                        ])
 
                     elif fit == critical2:
 
@@ -721,24 +743,47 @@ def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, n_iw=1, S_iwk_list=None, 
 
                     elif fit == critical3:
 
-                        a, b, c, d = par
+                        def froot(x):
+                            return critical3(x, par[0], par[1], par[2], par[3])
 
-                        sol = root_scalar(critical3, args=(a, b, c, d), bracket=[-min(x_fit), min(x_fit)])
-                        Xc = sol.root
+                        x0 = np.median(x_fit)
 
-                        denom = a * b * Xc**(b - 1) + c
+                        try:
+                            sol = root_scalar(
+                                froot,
+                                x0=x0,
+                                x1=x0 * 1.1 + 1e-12,
+                                method='secant'
+                            )
+                            Xc = sol.root
 
-                        dX_da = -Xc**b / denom
-                        dX_db = -(a * Xc**b * np.log(np.abs(Xc))) / denom
-                        dX_dc = -Xc / denom
-                        dX_dd = -1.0 / denom
+                        except ValueError:
 
-                        grad = np.array([dX_da, dX_db, dX_dc, dX_dd])
+                            xmin = max(np.min(x_fit), 1e-12)
+                            xmax = np.max(x_fit)
 
-                    if fix_exp is not None:
-                        grad.pop(1)
+                            if froot(xmin) * froot(xmax) > 0:
+                                Xc = np.nan
+                            else:
+                                sol = root_scalar(
+                                    froot,
+                                    bracket=[xmin, xmax],
+                                    method='brentq'
+                                )
+                                Xc = sol.root
 
-                    Xc_err = np.sqrt(grad @ cov @ grad)
+                        eps = 1e-8
+
+                        def dfdp(params, idx):
+                            p_plus = params.copy()
+                            p_minus = params.copy()
+                            p_plus[idx] += eps
+                            p_minus[idx] -= eps
+                            return (critical3(Xc, *p_plus) - critical3(Xc, *p_minus)) / (2 * eps)
+
+                        grad = np.array([dfdp(par, i) for i in range(len(par))])
+
+                    Xc_err = np.sqrt(np.abs(grad @ cov @ grad))
 
                     results['Xc'].append(Xc)
                     results['Xc_err'].append(Xc_err)
@@ -763,7 +808,7 @@ def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, n_iw=1, S_iwk_list=None, 
                 results['Qc'].append(np.array([0.]*dim))
 
         if len(fit_type) == 1:
-            for key in ['Xc', 'gamma', 'ampl', 'Xc_err', 'gamma_err', 'ampl_err']:
+            for key in ['Xc', 'gamma', 'ampl', 'Xc_err', 'gamma_err', 'ampl_err', 'Qc']:
                 results[key] = results[key][0]
 
     if save_file is not None:

@@ -96,7 +96,7 @@ class LATTICE:
         return np.fft.fftn(f_grid, axes=range(1, dim + 1)) / nk**dim
         # returns shape (niw, nk, nk[, nk])
 
-    def get_f_iwkq(self, f_iwk, q, method, f_iwR=None):
+    def get_f_iwkq(self, f_iwk, q, method='coarse', f_iwR=None):
         if f_iwk.ndim == 1:
             f_iwk = f_iwk[None, :]
         dim = self.dim
@@ -110,7 +110,6 @@ class LATTICE:
             return f_iwkq.reshape(f_iwk.shape)
 
         elif method == 'fine':
-            # f_iwR has shape (niw, nk, nk[, nk])
             grid_1d = np.arange(nk)
             grids = np.meshgrid(*([grid_1d] * dim), indexing='ij')
             phase_q = np.ones((nk,) * dim, dtype=complex)
@@ -120,16 +119,16 @@ class LATTICE:
                                 axes=range(1, dim + 1))
             return f_kq.reshape(f_iwk.shape)
     
-    def get_e_kq(self, q, method):
-        e_k = self.e_k.data[:, 0, 0]
+    def get_e_kq(self, e_k, q, method='coarse'):
+
         if method == 'fine':
-            # use analytic t_vals — exact for tight-binding, no FFT noise
             phase_q = np.exp(1j * np.pi * (self.R_vecs @ np.array(q)[:self.dim]))
             e_kq = (self.t_vals * phase_q) @ self.phase_k
-            return e_k.real, e_kq.real
-        else:
+            return e_kq.real
+        
+        elif method == 'coarse':
             e_kq = self.get_f_iwkq(e_k, q, method)
-            return e_k.real, e_kq[0].real
+            return e_kq[0].real
         
     def get_tetrahedra(self, nk):
         self.nk = nk
