@@ -55,34 +55,38 @@ class LATTICE:
 
         nk_tuple = (nk,) * self.dim + (1,) * (3 - self.dim)
 
+        k_mesh = self.H_r.get_kmesh(nk_tuple)
+        full_k_vecs = np.array([k.value for k in k_mesh])
+        ibz_w_k = np.ones(nk**self.dim)
+
+        if not fine:
+            self.k_vecs = full_k_vecs
+            self.full_k_vecs = full_k_vecs
+            self.ibz_w_k = ibz_w_k
+        else:
+            self.k_vecs_fine = full_k_vecs
+            self.full_k_vecs_fine = full_k_vecs
+            self.ibz_w_k_fine = ibz_w_k
+
         if ibz:
-            mapping, ir_grid = spglib.get_ir_reciprocal_mesh(nk_tuple, self._spg_cell)
+            mapping, ir_grid = spglib.get_ir_reciprocal_mesh(nk_tuple, self._spg_cell, is_shift=1)
             ir_idx = np.unique(mapping)
-            ibz_w_k = np.bincount(mapping)[ir_idx]
+            ibz_w_k = np.bincount(mapping)[ir_idx].astype(float)
             ir_pos  = np.searchsorted(ir_idx, mapping)
-            k_vecs = ir_grid[ir_idx] / np.array(nk_tuple, dtype=float)
+            k_vecs = ir_grid[ir_idx] / np.array(nk_tuple, dtype=float) * 2*np.pi
 
             if not fine:
                 self.k_vecs = k_vecs
                 self.ir_idx = ir_idx
                 self.ir_pos = ir_pos
                 self.ibz_w_k = ibz_w_k
+                self.full_k_vecs = full_k_vecs
             else:
                 self.k_vecs_fine = k_vecs
                 self.ir_idx_fine = ir_idx
                 self.ir_pos_fine = ir_pos
                 self.ibz_w_k_fine = ibz_w_k
-        else:
-            k_mesh = self.H_r.get_kmesh(nk_tuple)
-            k_vecs = np.array([k.value for k in k_mesh])
-            ibz_w_k = np.ones(len(k_vecs))
-
-            if not fine:
-                self.k_vecs = k_vecs
-                self.ibz_w_k = ibz_w_k
-            else:
-                self.k_vecs_fine = k_vecs
-                self.ibz_w_k_fine = ibz_w_k
+                self.full_k_vecs_fine = full_k_vecs
 
     def get_e_k_Gf(self, nk):
         
@@ -170,18 +174,19 @@ class LATTICE:
         elif method == 'coarse':
             e_kq = self.get_f_iwkq(e_k, q, nk, ibz=ibz)
             return e_kq[0].real
-        
-    def unfold_bz(self, k_ibz):
-        return k_ibz[self.ir_pos]
-    
+
     def unfold_e_k(self, e_k_ibz):
         return e_k_ibz[self.ir_pos]
 
     def fold_e_k(self, e_k_full):
-        return e_k_full[self.ir_idx]
+        e_ibz = np.zeros(len(self.ir_idx))
+        np.add.at(e_ibz, self.ir_pos, e_k_full)
+        return e_ibz / self.ibz_w_k
     
     def unfold_f_k(self, f_iwk_ibz):
         return f_iwk_ibz[:, self.ir_pos]
 
     def fold_f_k(self, f_iwk_full):
-        return f_iwk_full[:, self.ir_idx]
+        f_ibz = np.zeros((f_iwk_full.shape[0], len(self.ir_idx)))
+        np.add.at(f_ibz, (slice(None), self.ir_pos), f_iwk_full)
+        return f_ibz / self.ibz_w_k[None, :]

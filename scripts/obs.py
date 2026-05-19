@@ -64,7 +64,7 @@ def lindhard_ksp(mu, beta, e_k, e_kq, S_k, S_kq, de_kq_dq=None, ibz_w_k=None):
     chi0_sum = 0.0 + 0.0j
     
     if ibz_w_k is None:
-        ibz_w_k = np.array([1.]*len(e_k))
+        ibz_w_k = np.ones(len(e_k))
 
     if de_kq_dq is not None:
         dim = de_kq_dq.shape[0]
@@ -260,12 +260,7 @@ def get_invchi0_min(lat, mu, beta, nk, q_path=None, method='matsubara', niw=1, S
     S_iwk, niw, k_dep = get_iwk_arr(S_iwk, nk**dim, dim, niw)
 
     if q_path is not None:
-        if ibz:
-            k_vecs_full = lat.unfold_bz(lat.k_vecs)
-            print(len(k_vecs_full), k_vecs_full.min(), k_vecs_full.max())
-        else:
-            k_vecs_full = lat.k_vecs
-        q_grid = get_grid_from_path(q_path, k_vecs_full)
+        q_grid = get_grid_from_path(q_path, lat.full_k_vecs)
     else:
         q_grid = lat.k_vecs / np.pi
 
@@ -511,13 +506,16 @@ def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, niw=1, S_iwk_list=None, q
 
         if refine:
             nk_fine = int(refine_ratio*nk_val)
-            lat.get_bz(nk_fine, ibz=ibz)
-            lat.get_phase_k()
             if refine_ratio > 1:
+                lat.get_bz(nk_fine, ibz=ibz, fine=True)
                 lat.get_e_k(fine=True)
+                lat.get_phase_k()
             else:
+                lat.k_vecs_fine = lat.k_vecs
                 lat.e_k_fine = lat.e_k
+                lat.full_k_vecs_fine = lat.full_k_vecs
                 lat.ibz_w_k_fine = lat.ibz_w_k
+                lat.get_phase_k()
 
         # Parameter sweep
         for i_var, var in enumerate(par_dict[list_label]):
@@ -525,7 +523,9 @@ def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, niw=1, S_iwk_list=None, q
             par = {**par_dict, list_label: var}
             U, T, n = par['U'], par['T'], par['n']
 
-            mu = get_mu(e_k=lat.e_k_fine, n_goal=n, beta=1/T, S_iwk=S_iwk_list[i_var], ibz_w_k=lat.ibz_w_k_fine)
+            finer_e_k = lat.e_k_fine if refine else lat.e_k
+            finer_ibz_w_k = lat.ibz_w_k_fine if refine else lat.ibz_w_k
+            mu = get_mu(e_k=finer_e_k, n_goal=n, beta=1/T, S_iwk=S_iwk_list[i_var], ibz_w_k=finer_ibz_w_k)
             mu_avg[i_var] += mu
 
             Q, invchi0_Q, _ = get_invchi0_min(lat, mu, beta=1/T, nk=nk_val, q_path=q_path, S_iwk=S_iwk_list[i_var], method=method, niw=niw, refine=refine, refine_ratio=refine_ratio, niw_extr=niw_extr, ibz=ibz)
