@@ -59,12 +59,10 @@ def cexp(z):
 
 @njit
 def lindhard_ksp(mu, beta, e_k, e_kq, S_k, S_kq, de_kq_dq=None, ibz_w_k=None):
-   
-    Nk = len(e_k)
-    chi0_sum = 0.0 + 0.0j
     
+    Nk_ibz = len(e_k)
     if ibz_w_k is None:
-        ibz_w_k = np.ones(len(e_k))
+        ibz_w_k = np.ones(Nk_ibz)
 
     if de_kq_dq is not None:
         dim = de_kq_dq.shape[0]
@@ -73,7 +71,9 @@ def lindhard_ksp(mu, beta, e_k, e_kq, S_k, S_kq, de_kq_dq=None, ibz_w_k=None):
     lenS_k = len(S_k)
     lenS_kq = len(S_kq)
 
-    for k in range(Nk):
+    Nk = np.sum(ibz_w_k)
+    chi0_sum = 0.0 + 0.0j
+    for k in range(Nk_ibz):
         s_k = S_k[min(lenS_k - 1, k)]
         s_kq = S_kq[min(lenS_kq - 1, k)]
 
@@ -275,7 +275,7 @@ def get_invchi0_min(lat, mu, beta, nk, q_path=None, method='matsubara', niw=1, S
         
         invchi0_grid = []
         for q in q_grid:
-            e_kq = lat.get_e_kq(e_k, q, nk, ibz)
+            e_kq, _ = lat.get_e_kq(e_k, q, nk, ibz, method='fine')
             if k_dep:
                 S_iwkq = lat.get_f_iwkq(S_iwk, q, nk, ibz)
                 S_kq = S_iwkq
@@ -284,6 +284,8 @@ def get_invchi0_min(lat, mu, beta, nk, q_path=None, method='matsubara', niw=1, S
 
             chi0, _ = lindhard_ksp(mu, beta, e_k, e_kq, S_k[0], S_kq[0], ibz_w_k=lat.ibz_w_k)
             invchi0_grid.append(1/chi0)
+        
+        print(invchi0_grid)
 
     elif method == 'matsubara':#to do ibz
         if niw_extr:
@@ -307,22 +309,22 @@ def get_invchi0_min(lat, mu, beta, nk, q_path=None, method='matsubara', niw=1, S
 
         def invchi0_q_coarse(s):
             q = start + np.dot(J, np.atleast_1d(s))
-            e_kq = lat.get_e_kq(e_k, q, nk_fine, ibz)
+            e_kq, _ = lat.get_e_kq(e_k, q, nk_fine, ibz, fine=True, method='fine')
             if k_dep:
-                S_iwkq = lat.get_f_iwkq(S_iwk, q, nk_fine, ibz)
+                S_iwkq = lat.get_f_iwkq(S_iwk, q, nk_fine, ibz, fine=True)
                 S_kq = S_iwkq[0]
             else:
                 S_kq = S_iwk[0]
 
-            chi0, _ = lindhard_ksp(mu, beta, e_k, e_kq, S_iwk[0], S_kq, lat.ibz_w_k_fine)
+            chi0, _ = lindhard_ksp(mu, beta, e_k, e_kq, S_iwk[0], S_kq, ibz_w_k=lat.ibz_w_k_fine)
 
             return 1/chi0
 
         def invchi0_q_fine(s):
             q = start + np.dot(J, np.atleast_1d(s))
-            e_kq, de_kq_dq = lat.get_e_kq(e_k, q, nk_fine, ibz, 'fine')
+            e_kq, de_kq_dq = lat.get_e_kq(e_k, q, nk_fine, ibz, fine=True, method='fine')
             if k_dep:
-                S_iwkq = lat.get_f_iwkq(S_iwk, q, nk_fine, ibz, 'fine', f_iwR=S_iwR)
+                S_iwkq = lat.get_f_iwkq(S_iwk, q, nk_fine, ibz, fine=True, method='fine', f_iwR=S_iwR)
                 S_kq = S_iwkq[0]
             else:
                 S_kq = S_iwk[0]
@@ -372,10 +374,6 @@ def get_invchi0_min(lat, mu, beta, nk, q_path=None, method='matsubara', niw=1, S
                 mask = (s_grid_fine >= lo) & (s_grid_fine <= hi)
                 s_grid = s_grid_fine[mask]
 
-                step  = 1 / (len(q_grid_fine) - 1)
-                lo    = max(0.0, s0[0] - safe*step)
-                hi    = min(1.0, s0[0] + safe*step)
-                bounds = [(lo, hi)]
             else:
                 q_grid_fine = lat.k_vecs_fine / np.pi
                 J_inv = np.linalg.inv(J)
@@ -383,16 +381,22 @@ def get_invchi0_min(lat, mu, beta, nk, q_path=None, method='matsubara', niw=1, S
                 mask = np.all((s_grid_fine >= [b[0] for b in bounds]) & 
                             (s_grid_fine <= [b[1] for b in bounds]), axis=1)
                 s_grid = s_grid_fine[mask]
-
+            
+            invchi0_grid_fine = np.array([invchi0_q_coarse(s) for s in s_grid])
+            s0 = np.atleast_1d(s_grid[np.argmin(invchi0_grid_fine)])
+            
+            if q_path is not None:
+                step  = 1 / (len(q_grid_fine) - 1)
+                lo    = max(0.0, s0[0] - safe*step)
+                hi    = min(1.0, s0[0] + safe*step)
+                bounds = [(lo, hi)]
+            else:
                 step  = 1.0 / nk_fine
                 bounds = []
                 for d in range(dim):
                     lo = max(0.0, s0[d] - safe*step)
                     hi = min(1.0, s0[d] + safe*step)
                     bounds.append((lo, hi))
-            
-            invchi0_grid_fine = np.array([invchi0_q_coarse(s) for s in s_grid])
-            s0 = np.atleast_1d(s_grid[np.argmin(invchi0_grid_fine)])
 
         res = minimize(
             invchi0_q_fine,
@@ -421,7 +425,7 @@ def density_k(e_k, S_k, mu, beta, ibz_w_k):
 
     nF_real = (cos_xi + emx) / (ex + 2*cos_xi + emx)
 
-    return 2. * np.dot(nF_real, ibz_w_k)*len(e_k)
+    return 2. * np.dot(nF_real, ibz_w_k)/np.sum(ibz_w_k)
 
 @njit
 def density_iwk(e_k, S_iwk, mu, beta, ibz_w_k):
@@ -449,14 +453,15 @@ def density_iwk(e_k, S_iwk, mu, beta, ibz_w_k):
             nF = 1.0 / (np.exp(x) + 1.0)
         g_corr = g_sum - g0_sum + nF
         n_tot += 2.0/beta * g_corr * ibz_w_k[k]
-    return n_tot / Nk
+    return n_tot / np.sum(ibz_w_k)
 
 def get_mu(e_k, n_goal, beta, niw=1, S_iwk=None, dim=None, ibz_w_k=None):
     
-    S_iwk, niw, k_dep = get_iwk_arr(S_iwk, Nk=len(e_k), dim=dim, niw=niw)
+    Nk_ibz = len(e_k)
+    S_iwk, niw, k_dep = get_iwk_arr(S_iwk, Nk=Nk_ibz, dim=dim, niw=niw)
 
     if ibz_w_k is None:
-        ibz_w_k = np.ones(len(e_k))
+        ibz_w_k = np.ones(Nk_ibz)
 
     if k_dep:
         def density(mu): return density_iwk(e_k, S_iwk, mu, beta, ibz_w_k)
@@ -503,19 +508,13 @@ def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, niw=1, S_iwk_list=None, q
         
         lat.get_bz(nk, ibz=ibz)
         lat.get_e_k()
+        lat.get_phase_k()
 
         if refine:
             nk_fine = int(refine_ratio*nk_val)
-            if refine_ratio > 1:
-                lat.get_bz(nk_fine, ibz=ibz, fine=True)
-                lat.get_e_k(fine=True)
-                lat.get_phase_k()
-            else:
-                lat.k_vecs_fine = lat.k_vecs
-                lat.e_k_fine = lat.e_k
-                #lat.full_k_vecs_fine = lat.full_k_vecs
-                lat.ibz_w_k_fine = lat.ibz_w_k
-                lat.get_phase_k()
+            lat.get_bz(nk_fine, ibz=ibz, fine=True)
+            lat.get_e_k(fine=True)
+            lat.get_phase_k()
 
         # Parameter sweep
         for i_var, var in enumerate(par_dict[list_label]):

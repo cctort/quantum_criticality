@@ -63,11 +63,9 @@ class LATTICE:
 
             if not fine:
                 self.k_vecs = full_k_vecs
-                #self.full_k_vecs = full_k_vecs
                 self.ibz_w_k = ibz_w_k
             else:
                 self.k_vecs_fine = full_k_vecs
-                #self.full_k_vecs_fine = full_k_vecs
                 self.ibz_w_k_fine = ibz_w_k
 
         if ibz:
@@ -82,13 +80,11 @@ class LATTICE:
                 self.ir_idx = ir_idx
                 self.ir_pos = ir_pos
                 self.ibz_w_k = ibz_w_k
-                #self.full_k_vecs = full_k_vecs
             else:
                 self.k_vecs_fine = k_vecs
                 self.ir_idx_fine = ir_idx
                 self.ir_pos_fine = ir_pos
                 self.ibz_w_k_fine = ibz_w_k
-                #self.full_k_vecs_fine = full_k_vecs
 
     def get_e_k_Gf(self, nk):
         
@@ -98,13 +94,12 @@ class LATTICE:
     
     def get_e_k(self, fine=False):
 
-        H_k = self.H_r.fourier(self.k_vecs)
-        e_k = H_k[:,0,0].real
-
         if not fine:
-            self.e_k = e_k
+            H_k = self.H_r.fourier(self.k_vecs/(2*np.pi))
+            self.e_k = H_k[:,0,0].real
         else:
-            self.e_k_fine = e_k
+            H_k = self.H_r.fourier(self.k_vecs_fine/(2*np.pi))
+            self.e_k_fine = H_k[:,0,0].real
 
     def get_phase_k(self):
         
@@ -121,7 +116,7 @@ class LATTICE:
 
         return f_iwR
 
-    def get_f_iwkq(self, f_iwk, q, nk, ibz=False, method='coarse', f_iwR=None):
+    def get_f_iwkq(self, f_iwk, q, nk, ibz=False, fine=False, method='coarse', f_iwR=None):
         if f_iwk.ndim == 1:
             f_iwk = f_iwk[None, :]
 
@@ -130,7 +125,7 @@ class LATTICE:
 
         if method == 'coarse':
             if ibz:
-                f_iwk = self.unfold_f_k(f_iwk)
+                f_iwk = self.unfold_f_k(f_iwk, fine=fine)
 
             f_iwk_grid = f_iwk.reshape((f_iwk.shape[0],) + (nk,) * dim)
             shifts = tuple(-round(qi * nk / 2) % nk for qi in q)
@@ -138,15 +133,13 @@ class LATTICE:
             f_iwkq = f_iwkq_grid.reshape(f_iwk.shape)
 
             if ibz:
-                f_iwkq = self.fold_f_k(f_iwkq)
-        
+                f_iwkq = self.fold_f_k(f_iwkq, fine=fine)
+
             return f_iwkq
 
         elif method == 'fine':
-
             grid_1d = np.arange(nk)
             grids = np.meshgrid(*([grid_1d] * dim), indexing='ij')
-
             phase_q = np.ones((nk,) * dim, dtype=complex)
             for d in range(dim):
                 phase_q *= np.exp(1j * np.pi * q[d] * grids[d])
@@ -155,10 +148,9 @@ class LATTICE:
                 axes=range(1, dim + 1),
             )
             f_iwkq = f_iwkq.reshape(f_iwk.shape)
-
             return f_iwkq
 
-    def get_e_kq(self, e_k, q, nk, ibz=False, method='coarse'):
+    def get_e_kq(self, e_k, q, nk, ibz=False, fine=False, method='coarse'):
 
         q = np.array(q)
         
@@ -174,28 +166,13 @@ class LATTICE:
             return e_kq.real, de_kq_dq.real
 
         elif method == 'coarse':
-            e_kq = self.get_f_iwkq(e_k, q, nk, ibz=ibz)
+            e_kq = self.get_f_iwkq(e_k, q, nk, fine=fine, ibz=ibz)
             return e_kq[0].real
 
-    def unfold_e_k(self, e_k_ibz):
-        return e_k_ibz[self.ir_pos]
+    def unfold_f_k(self, f_k_ibz, fine=False):
+        ir_pos = self.ir_pos_fine if fine else self.ir_pos
+        return f_k_ibz[:, ir_pos]
 
-    def fold_e_k(self, e_k_full):
-        e_ibz = np.zeros(len(self.ir_idx))
-        np.add.at(e_ibz, self.ir_pos, e_k_full)
-        return e_ibz / self.ibz_w_k
-    
-    def unfold_f_k(self, f_iwk_ibz):
-        return f_iwk_ibz[:, self.ir_pos]
-
-    def fold_f_k(self, f_iwk_full):
-        f_ibz = np.zeros((f_iwk_full.shape[0], len(self.ir_idx)))
-        np.add.at(f_ibz, (slice(None), self.ir_pos), f_iwk_full)
-        return f_ibz / self.ibz_w_k[None, :]
-    
-    #def fold_q_to_ibz(self, q):
-     #   diffs = np.linalg.norm(self.full_k_vecs / np.pi - q, axis=1)
-    #    j = np.argmin(diffs)
-    #    if diffs[j] > 1e-8:
-    #        print(f'q vector {q} not in the BZ')
-    #    return self.k_vecs[self.ir_pos[j]]
+    def fold_f_k(self, f_k_full, fine=False):
+        ir_idx = self.ir_idx_fine if fine else self.ir_idx
+        return f_k_full[:, ir_idx]
