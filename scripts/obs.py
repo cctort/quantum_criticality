@@ -260,7 +260,7 @@ def get_invchi0_min(lat, mu, beta, nk, q_path=None, method='matsubara', niw=1, S
     S_iwk, niw, k_dep = get_iwk_arr(S_iwk, nk**dim, dim, niw)
 
     if q_path is not None:
-        q_grid = get_grid_from_path(q_path, lat.full_k_vecs)
+        q_grid = get_grid_from_path(q_path, lat.k_vecs)
     else:
         q_grid = lat.k_vecs / np.pi
 
@@ -513,7 +513,7 @@ def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, niw=1, S_iwk_list=None, q
             else:
                 lat.k_vecs_fine = lat.k_vecs
                 lat.e_k_fine = lat.e_k
-                lat.full_k_vecs_fine = lat.full_k_vecs
+                #lat.full_k_vecs_fine = lat.full_k_vecs
                 lat.ibz_w_k_fine = lat.ibz_w_k
                 lat.get_phase_k()
 
