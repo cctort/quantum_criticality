@@ -378,7 +378,7 @@ def pcut_chi(results, var_label, plot_Q=(1,1,1), fit=False, x_exp=1, y_exp=-1, s
     fit_par = None
     if fit:
         pos_idx = np.where(invchi > 0)
-        fit_par = np.polyfit(var_arr[pos_idx][:10]**x_exp, invchi[pos_idx][:10], 1)
+        fit_par = np.polyfit(var_arr[pos_idx][-8:]**x_exp, invchi[pos_idx][-8:], 1)
         x0 = var_arr[pos_idx][0]**x_exp
         axs[0].axline((x0, x0*fit_par[0] + fit_par[1]), slope=fit_par[0], linestyle='--', color=color, alpha=alpha)
 

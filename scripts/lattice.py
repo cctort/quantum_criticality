@@ -42,6 +42,9 @@ class LATTICE:
             for vec in nn_vectors:
                 hoppings[vec] = [[-tp]]
 
+        self.a_vecs = np.array(units).T
+        self.b_vecs = 2*np.pi * np.linalg.inv(self.a_vecs).T
+
         self.H_r = TBLattice(units=units, hoppings=hoppings)
 
         self.t_vals = np.array([t[0,0] for t in self.H_r.hoppings.values()])
@@ -56,35 +59,29 @@ class LATTICE:
         nk_tuple = (nk,) * self.dim + (1,) * (3 - self.dim)
 
         if not ibz:
-
             k_mesh = self.H_r.get_kmesh(nk_tuple)
-            full_k_vecs = np.array([k.value for k in k_mesh])
+            k_vecs = np.array([k.value for k in k_mesh])
             ibz_w_k = np.ones(nk**self.dim)
 
             if not fine:
-                self.k_vecs = full_k_vecs
-                self.ibz_w_k = ibz_w_k
+                self.k_vecs, self.ibz_w_k = k_vecs, ibz_w_k
             else:
-                self.k_vecs_fine = full_k_vecs
-                self.ibz_w_k_fine = ibz_w_k
+                self.k_vecs_fine, self.ibz_w_k_fine = k_vecs, ibz_w_k
 
-        if ibz:
+        else:
             mapping, ir_grid = spglib.get_ir_reciprocal_mesh(nk_tuple, self._spg_cell)
+
             ir_idx = np.unique(mapping)
             ibz_w_k = np.bincount(mapping)[ir_idx].astype(float)
             ir_pos  = np.searchsorted(ir_idx, mapping)
             k_vecs = ir_grid[ir_idx] / np.array(nk_tuple, dtype=float) * 2*np.pi
 
             if not fine:
-                self.k_vecs = k_vecs
-                self.ir_idx = ir_idx
-                self.ir_pos = ir_pos
-                self.ibz_w_k = ibz_w_k
+                self.k_vecs, self.ibz_w_k = k_vecs, ibz_w_k
+                self.ir_idx, self.ir_pos = ir_idx, ir_pos
             else:
-                self.k_vecs_fine = k_vecs
-                self.ir_idx_fine = ir_idx
-                self.ir_pos_fine = ir_pos
-                self.ibz_w_k_fine = ibz_w_k
+                self.k_vecs_fine, self.ibz_w_k_fine = k_vecs, ibz_w_k
+                self.ir_idx_fine, self.ir_pos_fine = ir_idx, ir_pos
 
     def get_e_k_Gf(self, nk):
         
@@ -102,77 +99,91 @@ class LATTICE:
             self.e_k_fine = H_k[:,0,0].real
 
     def get_phase_k(self):
-        
-        self.phase_k = np.exp(1j * (self.R_vecs @ self.k_vecs.T))
+        self.phase_k = np.exp(1j * (self.R_vecs @ self.k_vecs_fine.T))
         self.t_phase_k = self.t_vals[:, None] * self.phase_k
 
     def get_f_iwR(self, f_iwk, nk):
-        if f_iwk.ndim == 1:
-            f_iwk = f_iwk[None, :]
-
         dim = self.dim
-        f_iwk_grid = f_iwk.reshape((f_iwk.shape[0],) + (nk,) * dim)
+        niw = f_iwk.shape[0]
+        f_iwk_grid = f_iwk.reshape((niw,) + (nk,) * dim)
+
         f_iwR = np.fft.fftn(f_iwk_grid, axes=range(1, dim + 1)) / nk**dim
 
         return f_iwR
 
-    def get_f_iwkq(self, f_iwk, q, nk, ibz=False, fine=False, method='coarse', f_iwR=None):
-        if f_iwk.ndim == 1:
-            f_iwk = f_iwk[None, :]
-
+    def get_f_iwkq(self, f_iwk, q, nk, method='roll', f_iwR=None):
+        
         dim = self.dim
         q = np.array(q)
+        niw = f_iwk.shape[0]
+        Nk = f_iwk.shape[1]
 
-        if method == 'coarse':
-            if ibz:
-                f_iwk = self.unfold_f_k(f_iwk, fine=fine)
-
-            f_iwk_grid = f_iwk.reshape((f_iwk.shape[0],) + (nk,) * dim)
+        if method == 'roll':
+            f_iwk_grid = f_iwk.reshape((niw,) + (nk,) * dim)
             shifts = tuple(-round(qi * nk / 2) % nk for qi in q)
-            f_iwkq_grid = np.roll(f_iwk_grid, shifts, axis=tuple(range(1, f_iwk_grid.ndim)))
-            f_iwkq = f_iwkq_grid.reshape(f_iwk.shape)
-
-            if ibz:
-                f_iwkq = self.fold_f_k(f_iwkq, fine=fine)
-
+            f_iwkq = (np.roll(f_iwk_grid, shifts, axis=tuple(range(1, f_iwk_grid.ndim)))).reshape(f_iwk.shape)
             return f_iwkq
 
-        elif method == 'fine':
+        elif method == 'exact':
             grid_1d = np.arange(nk)
-            grids = np.meshgrid(*([grid_1d] * dim), indexing='ij')
-            phase_q = np.ones((nk,) * dim, dtype=complex)
-            for d in range(dim):
-                phase_q *= np.exp(1j * np.pi * q[d] * grids[d])
-            f_iwkq = np.fft.ifftn(
-                f_iwR * phase_q[None, ...] * nk**dim,
-                axes=range(1, dim + 1),
-            )
-            f_iwkq = f_iwkq.reshape(f_iwk.shape)
-            return f_iwkq
+            phase_grid = np.ones((nk,) * dim, dtype=complex)
+            for alpha in range(dim):
+                shape = [1] * dim
+                shape[alpha] = nk
+                phase_grid *= np.exp(1j * np.pi * q[alpha] * grid_1d.reshape(shape))
 
-    def get_e_kq(self, e_k, q, nk, ibz=False, fine=False, method='coarse'):
+            f_iwkq = np.fft.ifftn(f_iwR * phase_grid[None, ...], axes=range(1, dim + 1)).reshape(f_iwk.shape) * Nk
 
+            df_iwkq_dq = np.zeros((dim,) + f_iwk.shape)   # (dim, niw, nk^dim)
+            for alpha in range(dim):
+                shape = [1] * dim
+                shape[alpha] = nk
+                d_phase_grid = (1j * np.pi * grid_1d.reshape(shape)) * phase_grid
+                df_iwkq_dq[alpha] = np.fft.ifftn(f_iwR * d_phase_grid[None, ...], axes=range(1, dim + 1)).reshape(f_iwk.shape) * Nk
+
+            return f_iwkq, df_iwkq_dq
+
+    def get_e_kq(self, e_k, q, nk, method='roll'):
+        dim = self.dim
         q = np.array(q)
-        
-        if method == 'fine':
-            phase_q = np.exp(1j * np.pi * (self.R_vecs @ q[:self.dim]))
-            
-            e_kq = (phase_q @ self.t_phase_k).real
-            de_kq_dq = np.array([
-                (1j * np.pi * (self.R_vecs[:, alpha] * phase_q) @ self.t_phase_k).real
-                for alpha in range(self.dim)
-            ])
-            
-            return e_kq.real, de_kq_dq.real
+        Nk = len(e_k)
 
-        elif method == 'coarse':
-            e_kq = self.get_f_iwkq(e_k, q, nk, fine=fine, ibz=ibz)
-            return e_kq[0].real
+        if method == 'roll':
+            e_k_grid = e_k.reshape((nk,) * dim)
+            shifts = tuple(-round(qi * nk / 2) % nk for qi in q)
+            e_kq = np.roll(e_k_grid, shifts, axis=tuple(range(dim))).reshape(-1)
+            return e_kq
 
+        elif method == 'exact':
+            phase_q = np.exp(1j * np.pi * (self.R_vecs @ q))
+            t_phase_q = self.t_vals * phase_q
+
+            R_grid = np.zeros((nk,) * dim, dtype=complex)
+            for tq, R in zip(t_phase_q, self.R_vecs):
+                R_grid[tuple(int(r) % nk for r in R)] += tq
+            e_kq = np.fft.ifftn(R_grid).real.reshape(-1) * Nk
+
+            de_kq_dq = np.zeros((dim,) + (nk,) * dim)
+            for alpha in range(dim):
+                dR_grid = np.zeros((nk,) * dim, dtype=complex)
+                for tq, R in zip(1j * np.pi * self.R_vecs[:, alpha] * t_phase_q, self.R_vecs):
+                    dR_grid[tuple(int(r) % nk for r in R)] += tq
+                de_kq_dq[alpha] = np.fft.ifftn(dR_grid).real.reshape(dim, -1) * Nk
+
+            return e_kq, de_kq_dq
+
+    def unfold_f_iwk(self, f_iwk_ibz, fine=False):
+        ir_pos = self.ir_pos_fine if fine else self.ir_pos
+        return f_iwk_ibz[:, ir_pos]
+
+    def fold_f_iwk(self, f_iwk_full, fine=False):
+        ir_idx = self.ir_idx_fine if fine else self.ir_idx
+        return f_iwk_full[:, ir_idx]
+    
     def unfold_f_k(self, f_k_ibz, fine=False):
         ir_pos = self.ir_pos_fine if fine else self.ir_pos
-        return f_k_ibz[:, ir_pos]
+        return f_k_ibz[ir_pos]
 
     def fold_f_k(self, f_k_full, fine=False):
         ir_idx = self.ir_idx_fine if fine else self.ir_idx
-        return f_k_full[:, ir_idx]
+        return f_k_full[ir_idx]

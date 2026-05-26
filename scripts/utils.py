@@ -96,11 +96,12 @@ def make_poly(degrees):
     return poly
 
 def sweep_parallel(worker, sweep_list, save_file=None, n_jobs=-1):
-    #with threadpool_limits(1):
-    results_list = Parallel(n_jobs=n_jobs, verbose=10, backend='loky')(
-        delayed(worker)(**{**sweep_dict, 'verbose': False})
-        for sweep_dict in sweep_list
-    )
+
+    with threadpool_limits(1):
+        results_list = Parallel(n_jobs=n_jobs, verbose=10, backend='loky')(
+            delayed(worker)(**{**sweep_dict, 'verbose': False})
+            for sweep_dict in sweep_list
+        )
     if save_file is not None:
         HDFwrite_list(save_file, results_list)
         return None
@@ -116,82 +117,3 @@ def critical2(x, a, b, c):
 def critical3(x, a, b, c, d):
     w = 1 / (1 + np.exp((x - 0.1)/d))
     return w * (a * np.sign(x)*abs(x)**b - a*np.sign(c)*abs(c)**b) + (1 - w) * (a * np.sign(x - c)*abs(x - c))
-
-
-def profile_function_memory(func, *args, interval=0.05, timeout=None, save_file=None, **kwargs):
-    """
-    Run `func(*args, **kwargs)` while sampling process RSS (MB) at `interval` seconds.
-
-    Returns a dict with keys:
-      - 'peak_mb': peak resident set size observed (MB)
-      - 'mem_samples_mb': list of sampled RSS values (MB)
-      - 'retval': the return value from func
-
-    Fallback-safe: if `psutil` is not installed, raises RuntimeError.
-    """
-
-    if psutil is None:
-        raise RuntimeError('psutil is required for profile_function_memory but is not installed')
-
-    proc = psutil.Process(os.getpid())
-    mem_samples = []
-    stop_flag = {'stop': False}
-
-    def _sampler():
-        while not stop_flag['stop']:
-            try:
-                mem_samples.append(proc.memory_info().rss / (1024.0**2))
-            except Exception:
-                mem_samples.append(float('nan'))
-            time.sleep(interval)
-
-    th = threading.Thread(target=_sampler)
-    th.daemon = True
-    th.start()
-
-    retval = None
-    try:
-        retval = func(*args, **kwargs)
-    finally:
-        stop_flag['stop'] = True
-        th.join()
-
-    peak = max(mem_samples) if mem_samples else (proc.memory_info().rss / (1024.0**2))
-    result = {'peak_mb': peak, 'mem_samples_mb': mem_samples, 'retval': retval}
-
-    if save_file is not None:
-        try:
-            HDFwrite_dict(save_file, result)
-        except Exception:
-            pass
-
-    return result
-
-
-def profile_function_tracemalloc(func, *args, save_file=None, **kwargs):
-    """
-    Run `func(*args, **kwargs)` while tracing Python memory allocations with `tracemalloc`.
-
-    Returns a dict with keys:
-      - 'current_bytes': current traced memory after run
-      - 'peak_bytes': peak traced memory during run
-      - 'retval': return value from func
-
-    Note: `tracemalloc` only accounts for Python-level allocations (not native C/NumPy buffers).
-    """
-
-    tracemalloc.start()
-    try:
-        retval = func(*args, **kwargs)
-        current, peak = tracemalloc.get_traced_memory()
-    finally:
-        tracemalloc.stop()
-
-    result = {'current_bytes': current, 'peak_bytes': peak, 'retval': retval}
-    if save_file is not None:
-        try:
-            HDFwrite_dict(save_file, result)
-        except Exception:
-            pass
-
-    return result
