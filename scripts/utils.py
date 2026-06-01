@@ -108,12 +108,11 @@ def sweep_parallel(worker, sweep_list, save_file=None, n_jobs=-1):
     else:
         return results_list
 
-def critical1(x, a, b, c):
-    return a * np.sign(x)*abs(x)**b + c
+def GL(x, a, b, Xc):
+    return a * np.sign(x - Xc) * abs(x - Xc)**b
 
-def critical2(x, a, b, c):
-    return a * np.sign(x - c)*abs(x - c)**b
+def HMM(x, a, b, Xc):
+    return a * np.sign(x) * abs(x)**b - np.sign(Xc) * abs(Xc)**b
 
-def critical3(x, a, b, c, d):
-    w = 1 / (1 + np.exp((x - 0.1)/d))
-    return w * (a * np.sign(x)*abs(x)**b - a*np.sign(c)*abs(c)**b) + (1 - w) * (a * np.sign(x - c)*abs(x - c))
+def OZ(s, a, b, invxi):
+    return a/(s**2 + invxi**2 + b*s**3)

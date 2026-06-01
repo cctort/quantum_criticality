@@ -60,6 +60,27 @@ def cexp(z):
     return ezr * np.cos(zi) + 1j * ezr * np.sin(zi)
 
 @njit
+def Fermi(z_k):
+    z_k_real = z_k.real
+    if z_k_real > 500.:
+        nF_k = 0. + 0.j
+    elif z_k_real < -500.:
+        nF_k = 1. + 0.j
+    else:
+        nF_k = 1. / (cexp(z_k) + 1.)
+
+    return nF_k
+
+@njit
+def dFermi(z_k):
+    z_k_real = z_k.real
+    if z_k_real > 500. or z_k_real > 500.:
+        dnF_k = 0. + 0.j
+    else:
+        dnF_k = -cexp(z_k) / (cexp(z_k) + 1.)**2
+    return dnF_k
+
+@njit
 def lindhard_ksp(mu, beta, e_k, e_kq, S_k, S_kq, de_kq_dq=None):
     
     Nk = len(e_k)
@@ -75,7 +96,7 @@ def lindhard_ksp(mu, beta, e_k, e_kq, S_k, S_kq, de_kq_dq=None):
         s_k = S_k[min(lenS_k - 1, k)]
         s_kq = S_kq[min(lenS_kq - 1, k)]
 
-        e_k_eff = e_k [k] + s_k.real
+        e_k_eff = e_k[k] + s_k.real
         e_kq_eff = e_kq[k] + s_kq.real
         Gamma_k = -s_k.imag
         Gamma_kq = -s_kq.imag
@@ -83,34 +104,20 @@ def lindhard_ksp(mu, beta, e_k, e_kq, S_k, S_kq, de_kq_dq=None):
         xk = beta * (e_k_eff + 1j*Gamma_k - mu)
         xkq = beta * (e_kq_eff + 1j*Gamma_kq - mu)
 
-        if xk.real > 500.0:
-            nF_k = 0.0 + 0.0j
-        elif xk.real < -500.0:
-            nF_k = 1.0 + 0.0j
-        else:
-            nF_k = 1.0 / (cexp(xk) + 1.0)
-
-        if xkq.real > 500.0:
-            nF_kq = 0.0 + 0.0j
-            dnF_kq = 0.0 + 0.0j
-        elif xkq.real < -500.0:
-            nF_kq = 1.0 + 0.0j
-            dnF_kq = 0.0 + 0.0j
-        else:
-            ekq_val = cexp(xkq)
-            nF_kq = 1.0 / (ekq_val + 1.0)
-            dnF_kq = -ekq_val / (ekq_val + 1.0)**2
+        nF_k = Fermi(xk)
+        nF_kq = Fermi(xkq)
 
         de = (e_k_eff - e_kq_eff) - 1j*(Gamma_k - Gamma_kq)
 
-        if abs(de.real) < 1e-8:
-            chi0_k = -beta * nF_k * (1.0 - nF_k)/2
+        if abs(de) < 1e-8:
+            chi0_k = beta * nF_k * (1.0 - nF_k)
         else:
             chi0_k = -(nF_k - nF_kq) / de
         
         chi0_sum += chi0_k
         
         if de_kq_dq is not None and abs(de) > 1e-8:
+            dnF_kq = dFermi(xkq)
             for alpha in range(dim):
                 v = de_kq_dq[alpha, k]
                 num = (dnF_kq * beta * v) * de - (nF_k - nF_kq) * v
@@ -280,9 +287,8 @@ def get_grid_from_path(q_path, k_grid, tol=None):
 
     return q_grid
 
-def get_invchi0_min(lat, mu, beta, nk, q_path=None, method='matsubara', niw=1, S_iwk=None, refine=True, refine_ratio=1., niw_extr=True, ibz=True):
+def get_invchi0_min(lat, mu, beta, nk, q_path=None, method='matsubara', niw=1, S_val=None, niw_extr=True, ibz=True):
     
-    dim = lat.dim
     e_k = lat.e_k
     Nk = len(e_k)
 
@@ -293,7 +299,7 @@ def get_invchi0_min(lat, mu, beta, nk, q_path=None, method='matsubara', niw=1, S
         q_grid = lat.k_vecs / np.pi
 
     # From S_val to (niw, Nk) array
-    S_iwk, k_dep = get_iwk_arr(S_iwk, Nk, niw)
+    S_iwk, k_dep = get_iwk_arr(S_val, Nk, niw)
 
     if method == 'lindhard':
 
@@ -346,128 +352,193 @@ def get_invchi0_min(lat, mu, beta, nk, q_path=None, method='matsubara', niw=1, S
     q_min = q_grid[idx]
     invchi0_min = invchi0_grid[idx]
 
-    # Further minimum search over finer grid + gradient descent type method
-    if refine:
+    return np.array(q_min), invchi0_min, np.array(invchi0_grid)
 
-        # Get new nk, e_k and S_iwk
-        nk_fine = int(refine_ratio * nk)
+def refine_min(lat, mu, beta, nk, q_min, q_path=None, S_val=None, refine_ratio=1, ibz=True):
+    
+    dim = lat.dim
+    e_k = lat.e_k_fine
+    Nk = len(e_k)
 
-        e_k = lat.e_k_fine
+    # q_grid either from q_path or from the BZ/IBZ
+    if q_path is not None:
+        q_grid = get_grid_from_path(q_path, lat.k_vecs)
+    else:
+        q_grid = lat.k_vecs / np.pi
+
+    # From S_val to (1, Nk) array
+    S_iwk, k_dep = get_iwk_arr(S_val, Nk, 1)
+
+    # Get new nk, e_k and S_iwk
+    nk_fine = int(refine_ratio * nk)
+    e_k = lat.e_k_fine
+    if ibz:
+        e_k = lat.unfold_f_k(e_k, fine=True)
+
+    if k_dep:
         if ibz:
-            e_k = lat.unfold_f_k(e_k, fine=True)
+            S_iwk = lat.unfold_f_iwk(S_iwk, fine=True)
 
+        # If k_dep, precalculate S_iwR for the FFT
+        S_iwR = lat.get_f_iwR(S_iwk, nk_fine, fine=True)
+
+    # Evaluates e_kq/S_iwkq shifting the arrays by q with np.roll
+    def invchi0_q_roll(s):
+        q = start + np.dot(J, np.atleast_1d(s))
+
+        e_kq = lat.get_e_kq(e_k, q, nk_fine)
         if k_dep:
-            if ibz:
-                S_iwk = lat.unfold_f_iwk(S_iwk, fine=True)
+            S_iwkq = lat.get_f_iwkq(S_iwk, q, nk_fine)
+        else:
+            S_iwkq = S_iwk
 
-            # If k_dep, precalculate S_iwR for the FFT
-            S_iwR = lat.get_f_iwR(S_iwk, nk_fine, fine=True)
+        chi0, _ = lindhard_ksp(mu, beta, e_k, e_kq, S_iwk[0], S_iwkq[0])
 
-        # Evaluates e_kq/S_iwkq shifting the arrays by q with np.roll
-        def invchi0_q_roll(s):
-            q = start + np.dot(J, np.atleast_1d(s))
+        return 1/chi0
 
-            e_kq = lat.get_e_kq(e_k, q, nk_fine)
-            if k_dep:
-                S_iwkq = lat.get_f_iwkq(S_iwk, q, nk_fine)
-            else:
-                S_iwkq = S_iwk
+    # Evaluates e_kq/S_iwkq with the exact formulas, requires t_vals and S_iwR
+    def invchi0_q_exact(s):
+        q = start + np.dot(J, np.atleast_1d(s))
 
-            chi0, _ = lindhard_ksp(mu, beta, e_k, e_kq, S_iwk[0], S_iwkq[0])
+        e_kq, de_kq_dq = lat.get_e_kq(e_k, q, nk_fine, method='exact')
+        if k_dep:
+            S_iwkq = lat.get_f_iwkq(S_iwk, q, nk_fine, method='exact', f_iwR=S_iwR)
+        else:
+            S_iwkq = S_iwk
 
-            return 1/chi0
+        chi0, dchi0_dq = lindhard_ksp(mu, beta, e_k, e_kq, S_iwk[0], S_iwkq[0], de_kq_dq=de_kq_dq)
 
-        # Evaluates e_kq/S_iwkq with the exact formulas, requires t_vals and S_iwR
-        def invchi0_q_exact(s):
-            q = start + np.dot(J, np.atleast_1d(s))
+        dinvchi0_dq = -dchi0_dq / chi0**2
+        grad_s = J.T @ dinvchi0_dq
 
-            e_kq, de_kq_dq = lat.get_e_kq(e_k, q, nk_fine, method='exact')
-            if k_dep:
-                S_iwkq = lat.get_f_iwkq(S_iwk, q, nk_fine, method='exact', f_iwR=S_iwR)
-            else:
-                S_iwkq = S_iwk
+        return 1/chi0, grad_s
+    
+    # If needed you can increase the borders of the refinement region
+    safe = 1
 
-            chi0, dchi0_dq = lindhard_ksp(mu, beta, e_k, e_kq, S_iwk[0], S_iwkq[0], de_kq_dq=de_kq_dq)
+    if q_path is not None:
+        start = q_grid[0]
+        stop = q_grid[-1]
+        J     = (stop - start).reshape(dim, 1)
+        J_inv = np.linalg.pinv(J)
+        step  = 1 / (len(q_grid) - 1)
+        s0 = J_inv @ (q_min - start)
+        lo    = max(0.0, s0[0] - safe*step)
+        hi    = min(1.0, s0[0] + safe*step)
+        bounds = [(lo, hi)]
 
-            dinvchi0_dq = -dchi0_dq / chi0**2
-            grad_s = J.T @ dinvchi0_dq
+    else:
+        start = q_grid[0]
+        J = lat.b_vecs / (4*np.pi)
+        J_inv = np.linalg.inv(J)
+        s0 = J_inv @ (q_min - start)
+        step = 1.0 / nk
+        bounds = []
+        for d in range(dim):
+            lo = max(0.0, s0[d] - safe*step)
+            hi = min(1.0, s0[d] + safe*step)
+            bounds.append((lo, hi))
 
-            return 1/chi0, grad_s
-        
-        # If needed you can increase the borders of the refinement region
-        safe = 1
+    if refine_ratio > 1.:
 
         if q_path is not None:
-            start = q_grid[0]
-            stop = q_grid[-1]
-            J     = (stop - start).reshape(dim, 1)
-            step  = 1 / (len(q_grid) - 1)
-            s0    = np.array([idx / (len(q_grid) - 1)])
+            q_grid_fine = get_grid_from_path(q_path, lat.k_vecs_fine)
+            start = q_grid_fine[0]
+            J_inv = np.linalg.pinv(J)
+            s_grid_fine = np.array([J_inv @ (q - start) for q in q_grid_fine]).squeeze()
+            mask = (s_grid_fine >= lo) & (s_grid_fine <= hi)
+            s_grid = s_grid_fine[mask]
+
+        else:
+            q_grid_fine = lat.k_vecs_fine / np.pi
+            s_grid_fine = np.array([J_inv @ (q - start) for q in q_grid_fine])
+            mask = np.all((s_grid_fine >= [b[0] for b in bounds]) & 
+                        (s_grid_fine <= [b[1] for b in bounds]), axis=1)
+            s_grid = s_grid_fine[mask]
+        
+        invchi0_grid_fine = np.array([invchi0_q_roll(s) for s in s_grid])
+        s0 = np.atleast_1d(s_grid[np.argmin(invchi0_grid_fine)])
+        
+        if q_path is not None:
+            step  = 1 / (len(q_grid_fine) - 1)
             lo    = max(0.0, s0[0] - safe*step)
             hi    = min(1.0, s0[0] + safe*step)
             bounds = [(lo, hi)]
-
         else:
-            start = q_grid[0]
-            J = lat.b_vecs / (4*np.pi) #
-            J_inv = np.linalg.inv(J)
-            step = 1.0 / nk
-            s0 = J_inv @ (q_min - start)
+            step  = 1.0 / nk_fine
             bounds = []
             for d in range(dim):
                 lo = max(0.0, s0[d] - safe*step)
                 hi = min(1.0, s0[d] + safe*step)
                 bounds.append((lo, hi))
 
-        if refine_ratio > 1.:
+    res = minimize(
+        invchi0_q_exact,
+        x0=s0,
+        method='L-BFGS-B',
+        jac=True,
+        bounds=bounds,
+        options={'ftol': 1e-6, 'gtol': 1e-4, 'maxiter': 50}
+    )
+    s_min = res.x
 
-            if q_path is not None:
-                q_grid_fine = get_grid_from_path(q_path, lat.k_vecs_fine)
-                start = q_grid_fine[0]
-                J_inv = np.linalg.pinv(J)
-                s_grid_fine = np.array([J_inv @ (q - start) for q in q_grid_fine]).squeeze()
-                mask = (s_grid_fine >= lo) & (s_grid_fine <= hi)
-                s_grid = s_grid_fine[mask]
+    q_min = start + J @ s_min
+    invchi0_min, _ = invchi0_q_exact(s_min)
 
-            else:
-                q_grid_fine = lat.k_vecs_fine / np.pi
-                s_grid_fine = np.array([J_inv @ (q - start) for q in q_grid_fine])
-                mask = np.all((s_grid_fine >= [b[0] for b in bounds]) & 
-                            (s_grid_fine <= [b[1] for b in bounds]), axis=1)
-                s_grid = s_grid_fine[mask]
-            
-            invchi0_grid_fine = np.array([invchi0_q_roll(s) for s in s_grid])
-            s0 = np.atleast_1d(s_grid[np.argmin(invchi0_grid_fine)])
-            
-            if q_path is not None:
-                step  = 1 / (len(q_grid_fine) - 1)
-                lo    = max(0.0, s0[0] - safe*step)
-                hi    = min(1.0, s0[0] + safe*step)
-                bounds = [(lo, hi)]
-            else:
-                step  = 1.0 / nk_fine
-                bounds = []
-                for d in range(dim):
-                    lo = max(0.0, s0[d] - safe*step)
-                    hi = min(1.0, s0[d] + safe*step)
-                    bounds.append((lo, hi))
+    return np.array(q_min), invchi0_min
 
-        res = minimize(
-            invchi0_q_exact,
-            x0=s0,
-            method='L-BFGS-B',
-            jac=True,
-            bounds=bounds,
-            options={'ftol': 1e-6, 'gtol': 1e-4, 'maxiter': 50}
-        )
-        s_min = res.x
+def fit_invxi(lat, mu, beta, U, nk, q_min, S_val=None, fit_range=[0,0,1e-2], fit_pts=15, refine_ratio=1, ibz=True):
 
-        q_min = start + J @ s_min
-        invchi0_min, _ = invchi0_q_exact(s_min)
+    if lat.e_k_fine is None:
+        e_k = lat.e_k
+        fine = False
+    else:
+        e_k = lat.e_k_fine
+        fine = True
+    
+    nk_fine = int(refine_ratio * nk)
 
-    q_min = 1 - np.sort(np.abs(q_min - 1))
+    Nk = len(e_k)
+    S_iwk, k_dep = get_iwk_arr(S_val, Nk, 1)
+    
+    if ibz:
+        e_k = lat.unfold_f_k(e_k, fine=fine)
+        if k_dep:
+            S_iwk = lat.unfold_f_iwk(S_iwk, fine=fine)
+    
+    fit_range = np.array(fit_range)
+    start = q_min - fit_range
+    stop = q_min + fit_range
+    q_grid = np.linspace(start, stop, fit_pts)
+    
+    # 1/chi0 for each q using Lindhard
+    chi_grid = []
+    for q in q_grid:
+        e_kq, _ = lat.get_e_kq(e_k, q, nk_fine, method='exact')
 
-    return q_min, invchi0_min, invchi0_grid
+        if k_dep:
+            S_iwkq = lat.get_f_iwkq(S_iwk, q, nk_fine, method='exact')
+        else:
+            S_iwkq = S_iwk
+
+        chi0, _ = lindhard_ksp(mu, beta, e_k, e_kq, S_iwk[0], S_iwkq[0])
+        chi_grid.append(chi0/(1 - U*chi0))
+
+    p0 = [0.01, 0., 1/chi_grid[fit_pts//2]]
+    bounds = ([0., -np.inf, 0.], [1., np.inf, np.inf])
+
+    e_hat = (stop - start)
+    e_hat /= np.linalg.norm(e_hat)
+    s_grid = np.pi * (q_grid - q_min[None,:]) @ e_hat
+
+    try:
+        par, cov = curve_fit(OZ, s_grid, chi_grid, p0=p0, bounds=bounds, maxfev=10000)
+    
+    except RuntimeError:
+        par = [np.nan]*3
+        cov = [[np.nan]*3]*3
+
+    return (par, cov), (q_grid, 1/np.array(chi_grid))
 
 def density_k(e_k, S_k, mu, beta, ibz_w_k):
     x  = e_k + S_k.real - mu
@@ -533,10 +604,7 @@ def get_mu(e_k, n_goal, beta, niw=1, S_iwk=None, ibz_w_k=None):
     
     return brentq(f, a, b)
           
-def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, niw=1, S_iwk_list=None, q_path=None, method='matsubara', refine=True, refine_ratio=1., nk_avg=(1,1), fit=False, fit_type=critical1, fix_exp=None, niw_extr=True, ibz=True, save_file=None, verbose=True):
-    """
-    Run a 1D sweep of DMFT calculations over a list of tuples (T, U or n).
-    """
+def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, niw=1, S_iwk_list=None, q_path=None, method='matsubara', refine=True, refine_ratio=1., nk_avg=(1,1), get_xi=False, xi_range=[0,0,2e-2], xi_pts=15, fit=False, fit_type=HMM, niw_extr=True, ibz=True, save_file=None, verbose=True):
 
     start_time = time.time()
 
@@ -544,32 +612,41 @@ def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, niw=1, S_iwk_list=None, q
 
     # Extract the parameter list for the loop
     list_label = next(k for k, v in par_dict.items() if isinstance(v, (list, np.ndarray)))
+    sweep_length = len(par_dict[list_label])
 
-    if isinstance(S_iwk_list, (list, np.ndarray)) and len(S_iwk_list) == len(par_dict[list_label]):
+    if isinstance(S_iwk_list, (list, np.ndarray)) and len(S_iwk_list) == sweep_length:
         pass
     else:
-        S_iwk_list = [S_iwk_list] * len(par_dict[list_label])
+        S_iwk_list = [S_iwk_list] * sweep_length
     
     # Sweep initialization
     results = {'t': lat.t, 'dim': lat.dim, 'nk': nk, 'niw': niw,
                'tp': tp, 'method': method, 'q_path': q_path, 'nk_avg': nk_avg,
                'S_iwk_list': S_iwk_list, 'refine': refine, 'refine_ratio': refine_ratio,
-               'niw_extr': niw_extr, 'invchi': None,  'Q': None, 'mu': None, 'par_list': []}
+               'niw_extr': niw_extr, 'xi_range': xi_range, 'xi_pts': xi_pts, 
+               'invchi': None, 'Q': None, 'mu': None, 'invxi': None, 'par_list': [],
+               'fitchi': {}, 'fitxi': {}}
 
     nk_list = [nk - i*nk_avg[1] for i in range(nk_avg[0])]
-    Q_avg = np.zeros((len(par_dict[list_label]), 3))
-    invchi0_avg = np.zeros(len(par_dict[list_label]))
-    mu_avg = np.zeros(len(par_dict[list_label]))
-    total_jobs = len(par_dict[list_label])*len(nk_list)
+
+    Q_avg = np.zeros((sweep_length, 3))
+    invchi0_avg = np.zeros(sweep_length)
+    mu_avg = np.zeros(sweep_length)
+    if get_xi:
+        invxi_avg = np.zeros(sweep_length)
+
+    total_jobs = sweep_length*len(nk_list)
     for i_nk, nk_val in enumerate(nk_list):
         
-        lat.get_bz(nk, ibz=ibz)
+        lat.get_bz(nk_val, ibz=ibz)
         lat.get_e_k()
+        nk_xi = nk_val
 
         if refine:
             nk_fine = int(refine_ratio*nk_val)
             lat.get_bz(nk_fine, ibz=ibz, fine=True)
             lat.get_e_k(fine=True)
+            nk_xi = nk_fine
 
         # Parameter sweep
         for i_var, var in enumerate(par_dict[list_label]):
@@ -582,122 +659,113 @@ def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, niw=1, S_iwk_list=None, q
             mu = get_mu(e_k=finer_e_k, n_goal=n, beta=1/T, S_iwk=S_iwk_list[i_var], ibz_w_k=finer_ibz_w_k)
             mu_avg[i_var] += mu
 
-            Q, invchi0_Q, _ = get_invchi0_min(lat, mu, beta=1/T, nk=nk_val, q_path=q_path, S_iwk=S_iwk_list[i_var], method=method, niw=niw, refine=refine, refine_ratio=refine_ratio, niw_extr=niw_extr, ibz=ibz)
+            Q, invchi0_Q, _ = get_invchi0_min(lat, mu, 1/T, nk_val, q_path, method, niw, S_iwk_list[i_var], niw_extr, ibz)
+            
+            if refine:
+                Q, invchi0_Q = refine_min(lat, mu, 1/T, nk, Q, q_path, S_iwk_list[i_var], refine_ratio, ibz)
+            
+            if get_xi:
+                if invchi0_Q - U > 0.:
+                    fit_out, _ = fit_invxi(lat, mu, 1/T, U, nk_xi, Q, S_iwk_list[i_var], xi_range, xi_pts, ibz)
+                    par, _ = fit_out
+                    invxi = par[2]
+                else:
+                    invxi = np.nan
 
             # Results for each U,T,n point
             invchi0_avg[i_var] += invchi0_Q.real
-            Q_avg[i_var] += np.array(Q)
+            Q_avg[i_var] += Q
+            if get_xi:
+                invxi_avg[i_var] += invxi
 
             if i_nk == 0:
                 results['par_list'].append({'U': U, 'T': T, 'n': n})
 
             if verbose:
-                job = i_var+i_nk*len(par_dict[list_label])+1
+                job = i_var+i_nk*sweep_length+1
                 print(f"\rJob {job}/{total_jobs}: U={U:.3f}, T={T:.3f}, n={n:.3f}", end='')
 
     results['invchi'] = invchi0_avg / len(nk_list) - U
     results['Q'] = Q_avg / len(nk_list)
     results['mu'] = mu_avg / len(nk_list)
+    if get_xi:
+        results['invxi'] = invxi_avg / len(nk_list)
+    else:
+        None
 
     if fit:
         if not isinstance(fit_type, (list, np.ndarray)):
             fit_type = [fit_type]
-            fix_exp = [fix_exp]
-        else:
-            if fix_exp is None:
-                fix_exp = [None]*len(fit_type)
 
-        pos_mask = results['invchi'] > 0
-        x_fit = np.array(par_dict[list_label])[pos_mask][:15]
-        y_fit = results['invchi'][pos_mask][:15]
+        par_keys = ['a', 'b', 'Xc']
+        for label in par_keys:
+            results['fitchi'][label] = []
+            results['fitchi'][f'{label}_err'] = []
 
-        for key in ['ampl', 'gamma', 'offset', 'Xc', 'Qc', 'mu_c',
-                    'ampl_err', 'gamma_err', 'Xc_err', 'offset_err']:
-            results[key] = []
+            if get_xi:
+                results['fitxi'][label] = []
+                results['fitxi'][f'{label}_err'] = []
+
+        results['Qc'], results['mu_c'] = [], []
 
         for fit in fit_type:
-            if len(x_fit) >= 2:
-                try:
+
+            labels_to_fit = ['chi']
+            if get_xi:
+                labels_to_fit.append('xi')
+
+            for label in labels_to_fit:
+                pos_mask = results[f'inv{label}'] > 0
+                x_fit = np.array(par_dict[list_label])[pos_mask][:15]
+                y_fit = results[f'inv{label}'][pos_mask][:15]
+
+                if len(x_fit) >= 2:
+                    try:
+                        p0 = [1., 1., np.min(x_fit) * 0.9]
+                        bounds = ([0., 0., -np.inf], [np.inf, np.inf, np.inf])
+                        par, cov = curve_fit(fit, x_fit, y_fit, p0=p0, bounds=bounds, maxfev=10000)
+
+                        for i, key in enumerate(par_keys):
+                            results[f'fit{label}'][key].append(par[i])
+                            err = np.sqrt(cov[i, i])
+                            results[f'fit{label}'][f'{key}_err'].append(err)
+                        
+                        if label == 'chi':
+                            Q_vals = results['Q'][pos_mask][:2]
+                            m = (Q_vals[1] - Q_vals[0])/(x_fit[1] - x_fit[0])
+                            results['Qc'].append(Q_vals[0] - m * (x_fit[0] - results[f'fit{label}']['Xc']))
+
+                            mu_vals = results['mu'][pos_mask][:2]
+                            m = (mu_vals[1] - mu_vals[0])/(x_fit[1] - x_fit[0])
+                            results['mu_c'].append(mu_vals[0] - m * (x_fit[0] - results[f'fit{label}']['Xc']))
+
+                    except RuntimeError:
+                        print(f"Fit of inv{label} values did not converge")
+                else:
+                    print("Not enough points to fit!")
                     
-                    p0 = [1., 1., np.min(x_fit) * 0.9]
-                    bounds = ([0., 0., -np.inf],
-                            [np.inf, np.inf, np.inf])
-                    par_labels = ['ampl', 'gamma', 'offset']
+                    for i, key in enumerate(par_keys):
+                        results[f'fit{label}'][key].append(np.nan)
+                        results[f'fit{label}'][f'{key}_err'].append(np.nan)
 
-                    fit_new = fit
-
-
-                    par_fit, cov_fit = curve_fit(
-                        fit_new,
-                        x_fit,
-                        y_fit,
-                        p0=p0,
-                        bounds=bounds,
-                        maxfev=10000
-                    )
-
-                    par = par_fit
-                    cov = cov_fit
-                    for i, label in enumerate(par_labels):
-                        results[label].append(par[i])
-                        err = np.sqrt(cov[i, i])
-                        results[f'{label}_err'].append(err)
-
-                    if fit == critical1:
-                        a, b, c = par
-                        z = -c / a
-                        Xc = np.sign(z) * np.abs(z)**(1 / b)
-                        dXc_dz = (1 / b) * np.abs(z)**(1 / b - 1)
-                        grad = np.array([
-                            -dXc_dz * z / a,
-                            -Xc * np.log(np.abs(z) + 1e-15) / b**2,
-                            -dXc_dz / a
-                        ])
-
-                    elif fit == critical2:
-                        Xc = par[2]
-                        grad = np.array([0., 0., 1.])
-
-                    Xc_err = np.sqrt(np.abs(grad @ cov @ grad))
-
-                    results['Xc'].append(Xc)
-                    results['Xc_err'].append(Xc_err)
-
-                    Q_vals = results['Q'][pos_mask][:2]
-                    m = (Q_vals[1] - Q_vals[0])/(x_fit[1] - x_fit[0])
-                    results['Qc'].append(Q_vals[0] - m * (x_fit[0] - Xc))
-
-                    mu_vals = results['mu'][pos_mask][:2]
-                    m = (mu_vals[1] - mu_vals[0])/(x_fit[1] - x_fit[0])
-                    results['mu_c'].append(mu_vals[0] - m * (x_fit[0] - Xc))
-
-                except RuntimeError as e:
-                    print(f"\nFit failed: {e}")
-                    
-                    for key in ['Xc', 'gamma', 'ampl', 'Xc_err', 'gamma_err', 'ampl_err']:
-                        results[key].append(0.)
-                    
-                    results['Qc'].append(np.array([np.nan]*dim))
-                    results['mu_c'].append(np.nan)
-                    
-            else:
-                print("\nFit skipped: fewer than 2 positive points")
+                    if label == 'chi':
+                        results['Qc'].append(np.array([np.nan]*dim))
+                        results['mu_c'].append(np.nan)
                 
-                for key in ['Xc', 'gamma', 'ampl', 'Xc_err', 'gamma_err', 'ampl_err']:
-                    results[key].append(0.)
-                    
-                results['Qc'].append(np.array([np.nan]*dim))
-                results['mu_c'].append(np.nan)
-
         if len(fit_type) == 1:
-            for key in ['Xc', 'gamma', 'ampl', 'Xc_err', 'gamma_err', 'ampl_err', 'Qc', 'mu_c']:
-                results[key] = results[key][0]
+            for label in labels_to_fit:
+                for key in par_keys:
+                    results[f'fit{label}'][key] = results[f'fit{label}'][key][0]
+                    results[f'fit{label}'][f'{key}_err'] = results[f'fit{label}'][f'{key}_err'][0]
+
+            results['Qc'] = results['Qc'][0]
+            results['mu_c'] = results['mu_c'][0]
 
     if save_file is not None:
         HDFwrite_dict(save_file, results)
     
     elapsed_time = time.time() - start_time
     if verbose:
-        print(f"\rCompleted {len(par_dict[list_label])} jobs in {elapsed_time:.2f} seconds | U={U:.3f}, T={T:.3f}, n={n:.3f}")
+        print(f"\rCompleted {sweep_length} jobs in {elapsed_time:.2f} seconds | U={U:.3f}, T={T:.3f}, n={n:.3f}")
 
     return results

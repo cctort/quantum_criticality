@@ -54,6 +54,13 @@ class LATTICE:
         unit_mat[:dim, :dim] = np.array(units, dtype=float)
         self._spg_cell = (unit_mat, [[0., 0., 0.]], [1])
 
+        self.k_vecs, self.k_vecs_fine = None, None
+        self.e_k, self.e_k_fine = None, None
+
+        self.ibz_w_k, self.ibz_w_k = None, None
+        self.ibz_idx, self.ibz_idx_fine = None, None
+        self.ibz_pos, self.ibz_pos_fine = None, None
+
     def get_bz(self, nk, ibz=False, fine=False):
 
         nk_tuple = (nk,) * self.dim + (1,) * (3 - self.dim)
@@ -71,23 +78,17 @@ class LATTICE:
         else:
             mapping, ir_grid = spglib.get_ir_reciprocal_mesh(nk_tuple, self._spg_cell)
 
-            ir_idx = np.unique(mapping)
-            ibz_w_k = np.bincount(mapping)[ir_idx].astype(float)
-            ir_pos  = np.searchsorted(ir_idx, mapping)
-            k_vecs = ir_grid[ir_idx] / np.array(nk_tuple, dtype=float) * 2*np.pi
+            ibz_idx = np.unique(mapping)
+            ibz_w_k = np.bincount(mapping)[ibz_idx].astype(float)
+            ibz_pos  = np.searchsorted(ibz_idx, mapping)
+            k_vecs = ir_grid[ibz_idx] / np.array(nk_tuple, dtype=float) * 2*np.pi
 
             if not fine:
                 self.k_vecs, self.ibz_w_k = k_vecs, ibz_w_k
-                self.ir_idx, self.ir_pos = ir_idx, ir_pos
+                self.ibz_idx, self.ibz_pos = ibz_idx, ibz_pos
             else:
                 self.k_vecs_fine, self.ibz_w_k_fine = k_vecs, ibz_w_k
-                self.ir_idx_fine, self.ir_pos_fine = ir_idx, ir_pos
-
-    def get_e_k_Gf(self, nk):
-        
-        nk_tuple = (nk,) * self.dim + (1,) * (3 - self.dim)
-        k_mesh = self.H_r.get_kmesh(nk_tuple)
-        self.e_k_Gf = self.H_r.fourier(k_mesh)
+                self.ibz_idx_fine, self.ibz_pos_fine = ibz_idx, ibz_pos
     
     def get_e_k(self, fine=False):
 
@@ -97,10 +98,6 @@ class LATTICE:
         else:
             H_k = self.H_r.fourier(self.k_vecs_fine/(2*np.pi))
             self.e_k_fine = H_k[:,0,0].real
-
-    def get_phase_k(self):
-        self.phase_k = np.exp(1j * (self.R_vecs @ self.k_vecs_fine.T))
-        self.t_phase_k = self.t_vals[:, None] * self.phase_k
 
     def get_f_iwR(self, f_iwk, nk):
         dim = self.dim
@@ -163,27 +160,27 @@ class LATTICE:
                 R_grid[tuple(int(r) % nk for r in R)] += tq
             e_kq = np.fft.ifftn(R_grid).real.reshape(-1) * Nk
 
-            de_kq_dq = np.zeros((dim,) + (nk,) * dim)
+            de_kq_dq = np.zeros((dim, Nk))
             for alpha in range(dim):
                 dR_grid = np.zeros((nk,) * dim, dtype=complex)
                 for tq, R in zip(1j * np.pi * self.R_vecs[:, alpha] * t_phase_q, self.R_vecs):
                     dR_grid[tuple(int(r) % nk for r in R)] += tq
-                de_kq_dq[alpha] = np.fft.ifftn(dR_grid).real.reshape(dim, -1) * Nk
+                de_kq_dq[alpha] = np.fft.ifftn(dR_grid).real.reshape(-1) * Nk
 
             return e_kq, de_kq_dq
 
     def unfold_f_iwk(self, f_iwk_ibz, fine=False):
-        ir_pos = self.ir_pos_fine if fine else self.ir_pos
-        return f_iwk_ibz[:, ir_pos]
+        ibz_pos = self.ibz_pos_fine if fine else self.ibz_pos
+        return f_iwk_ibz[:, ibz_pos]
 
     def fold_f_iwk(self, f_iwk_full, fine=False):
-        ir_idx = self.ir_idx_fine if fine else self.ir_idx
-        return f_iwk_full[:, ir_idx]
+        ibz_idx = self.ibz_idx_fine if fine else self.ibz_idx
+        return f_iwk_full[:, ibz_idx]
     
     def unfold_f_k(self, f_k_ibz, fine=False):
-        ir_pos = self.ir_pos_fine if fine else self.ir_pos
-        return f_k_ibz[ir_pos]
+        ibz_pos = self.ibz_pos_fine if fine else self.ibz_pos
+        return f_k_ibz[ibz_pos]
 
     def fold_f_k(self, f_k_full, fine=False):
-        ir_idx = self.ir_idx_fine if fine else self.ir_idx
-        return f_k_full[ir_idx]
+        ibz_idx = self.ibz_idx_fine if fine else self.ibz_idx
+        return f_k_full[ibz_idx]

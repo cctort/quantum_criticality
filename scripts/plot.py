@@ -6,6 +6,7 @@ from scipy.interpolate import griddata
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
+import matplotlib.gridspec as gridspec
 mpl.rcParams['figure.dpi']=100
 
 import seaborn as sns
@@ -318,53 +319,77 @@ def pcut_dmft(results, var_label, title='', label='', figure=None):
 
     return fig, axs
 
-def pcut_chi(results, var_label, plot_Q=(1,1,1), fit=False, x_exp=1, y_exp=-1, scale=('lin','lin'),
+def pcut_chi(results, var_label, plot_Q=(1,1,1), fit=False, x_exp=(1,1),
              title='', label='', figure=None, alpha=1., color=None, styles=('o-','o-')):
 
-    # Create figure if needed
+    has_xi = results.get('invxi') is not None
+    if not isinstance(x_exp, tuple):
+        x_exp = (x_exp,)
+
     if figure is None:
         dim = len(results['Q'][0])
-        fig = plt.figure(figsize=(12, 5))
-        axs = [None]*(1+sum(plot_Q))
-        axs[0] = fig.add_subplot(1, 2, 1)
-        
-        if x_exp == 1:
+        n_Q = sum(plot_Q)
+        fig = plt.figure(figsize=(12, 6))
+
+        outer_gs = gridspec.GridSpec(1, 2, figure=fig)
+
+        # --- Left panel: chi (and optionally xi) as nested subplots ---
+        n_left = 2 if has_xi else 1
+        left_gs = gridspec.GridSpecFromSubplotSpec(n_left, 1, subplot_spec=outer_gs[0], hspace=0.25)
+
+        ax_chi = fig.add_subplot(left_gs[0])
+
+        if x_exp[0] == 1:
             x_label = var_label
-        elif x_exp == 0.5:
+        elif x_exp[0] == 0.5:
             x_label = rf'$\sqrt{{{var_label}}}$'
         else:
             x_label = rf'${var_label}^{{{x_exp:.2f}}}$'
 
-        if y_exp == 1:
-            y_label = r'$\chi(\mathbf{Q})$'
-        elif y_exp == -1:
-            y_label = r'$\chi^{-1}(\mathbf{Q})$'
-        else:
-            y_label = rf'$\chi^{y_exp:.2f}(\mathbf{{Q}})$'
+        ax_chi.set_xlabel(x_label)
+        ax_chi.set_ylabel(r'$\chi^{-1}(\mathbf{Q})$')
+        ax_chi.set_title('Correlations')
+        ax_chi.grid()
 
-        if scale[0] == 'log':
-            axs[0].set_xscale('log')
-        if scale[1] == 'log':
-            axs[0].set_yscale('log')
+        ax_xi = None
+        if has_xi:
 
-        axs[0].set_xlabel(x_label)
-        axs[0].set_ylabel(y_label)
+            if x_exp[1] == 1:
+                x_label = var_label
+            elif x_exp[1] == 0.5:
+                x_label = rf'$\sqrt{{{var_label}}}$'
+            else:
+                x_label = rf'${var_label}^{{{x_exp:.2f}}}$'
 
-        axs[0].set_title('Susceptibility')
-        axs[0].grid()
-        
+            ax_xi = fig.add_subplot(left_gs[1])
+            ax_xi.set_xlabel(x_label)
+            ax_xi.set_ylabel(r'$\xi^{-1}$')
+            ax_xi.grid()
+
+        # --- Right panel: Q components as nested subplots ---
+        right_gs = gridspec.GridSpecFromSubplotSpec(n_Q, 1, subplot_spec=outer_gs[1], hspace=0.2)
+
         Q_label = [r'$Q_x/\pi-1$', r'$Q_y/\pi-1$', r'$Q_z/\pi-1$']
+        ax_Q = []
         i = 0
         for d in range(dim):
             if plot_Q[d] == 1:
+                ax = fig.add_subplot(right_gs[i])
+                ax.set_ylabel(Q_label[d])
+                ax.grid()
+                ax_Q.append(ax)
                 i += 1
-                axs[i] = fig.add_subplot(sum(plot_Q), 2, 2*i)
-                axs[i].set_xlabel(var_label)
-                axs[i].set_ylabel(Q_label[d])
-                axs[i].grid()
-        axs[1].set_title(r'$\mathbf{Q}$ vector')
+        ax_Q[-1].set_xlabel(var_label)
+
+        if ax_Q:
+            ax_Q[0].set_title(r'$\mathbf{Q}$ vector')
+
+        axs = [ax_chi, ax_xi] + ax_Q
+
     else:
         fig, axs = figure
+        ax_chi = axs[0]
+        ax_xi  = axs[1]
 
     # Data arrays
     var_arr = np.array([par[var_label] for par in results['par_list']])
@@ -375,15 +400,28 @@ def pcut_chi(results, var_label, plot_Q=(1,1,1), fit=False, x_exp=1, y_exp=-1, s
         used_colors = {line.get_color() for line in axs[0].lines}
         color = next(c for c in color_list if c not in used_colors)
 
-    fit_par = None
+    fit_par_chi = None
     if fit:
         pos_idx = np.where(invchi > 0)
-        fit_par = np.polyfit(var_arr[pos_idx][-8:]**x_exp, invchi[pos_idx][-8:], 1)
-        x0 = var_arr[pos_idx][0]**x_exp
-        axs[0].axline((x0, x0*fit_par[0] + fit_par[1]), slope=fit_par[0], linestyle='--', color=color, alpha=alpha)
+        fit_par_chi = np.polyfit(var_arr[pos_idx][:15]**x_exp[0], invchi[pos_idx][:15], 1)
+        x0 = var_arr[pos_idx][0]**x_exp[0]
+        ax_chi.axline((x0, x0*fit_par_chi[0] + fit_par_chi[1]), slope=fit_par_chi[0], linestyle='--', color=color, alpha=alpha)
 
-    # Plot main line
-    axs[0].plot(var_arr**x_exp, (1/invchi)**y_exp, styles[0], markersize=4, color=color, label=label, alpha=alpha)
+    # Plot chi
+    ax_chi.plot(var_arr**x_exp[0], invchi, styles[0], markersize=4, color=color, label=label, alpha=alpha)
+
+    # Plot xi if available
+    fit_par_xi = None
+    if has_xi:
+        invxi = np.array(results['invxi'])
+
+        if fit:
+            pos_idx = np.where(invxi > 0)
+            fit_par_xi = np.polyfit(var_arr[pos_idx][:15]**x_exp[1], invxi[pos_idx][:15], 1)
+            x0 = var_arr[pos_idx][0]**x_exp[1]
+            ax_xi.axline((x0, x0*fit_par_xi[0] + fit_par_xi[1]), slope=fit_par_xi[0], linestyle='--', color=color, alpha=alpha)
+            
+        ax_xi.plot(var_arr**x_exp[1], invxi, styles[0], markersize=4, color=color, alpha=alpha)
 
     # Plot Q components
     dim = len(results['Q'][0])
@@ -391,84 +429,19 @@ def pcut_chi(results, var_label, plot_Q=(1,1,1), fit=False, x_exp=1, y_exp=-1, s
     for d in range(dim):
         if plot_Q[d] == 1:
             i += 1
-            axs[i].plot(var_arr, Q[d]-1, styles[1], markersize=4, color=color, alpha=alpha)
+            axs[i+1].plot(var_arr, Q[d]-1, styles[1], markersize=4, color=color, alpha=alpha)
 
     if label != '':
-        axs[0].legend()
+        ax_chi.legend()
+    
+    #if has_xi:
+    #    chi_xlim = tuple(np.sign(x)*abs(x)**x_exp[1] for x in axs[-1].get_xlim())
+    #    ax_xi.set_xlim(chi_xlim)
 
     fig.suptitle(title)
-
-    return (fig, axs), fit_par
-
-def pcut_conv(results, var_label, title='', label='', figure=None):
-
-    if figure is None:
-
-        fig = plt.figure(figsize=(12, 5))
-        axs = [None]*6
-
-        axs[0] = fig.add_subplot(2, 3, 1)
-        axs[0].set_xlabel(var_label)
-        axs[0].set_ylabel(r'$\Sigma$ residuals')
-        axs[0].set_yscale('log')
-        axs[0].grid()
-
-        axs[1] = fig.add_subplot(2, 3, 4)
-        axs[1].set_xlabel(var_label)
-        axs[1].set_ylabel('Total iterations')
-        axs[1].grid()
-
-        axs[2] = fig.add_subplot(2, 3, 2)
-        axs[2].set_xlabel(var_label)
-        axs[2].set_ylabel(r'$n$')
-        axs[2].grid()
-
-        axs[3] = fig.add_subplot(2, 3, 5)
-        axs[3].set_xlabel(var_label)
-        axs[3].set_ylabel(r'$\mu$')
-        axs[3].grid()
-
-        axs[4] = fig.add_subplot(2, 3, 3)
-        axs[4].set_xlabel(var_label)
-        axs[4].set_ylabel(r'$n_0$')
-        axs[4].grid()
-
-        axs[5] = fig.add_subplot(2, 3, 6)
-        axs[5].set_xlabel(var_label)
-        axs[5].set_ylabel(r'$\mu_0$')
-        axs[5].grid()
-    
-    else:
-
-        fig, axs = figure
-
-    num_plots = len(axs[0].lines)
-    color = color_list[num_plots % len(color_list)]
-
-    sorted_keys = sorted((key for key in results if key != 'inputs'), key=lambda k: dict(k)[var_label])
-    var = [dict(key)[var_label] for key in sorted_keys]
-
-    steps_list = [results[key]['steps'] for key in sorted_keys]
-    diff_list = [results[key]['diff'] for key in sorted_keys]
-    mu_list = [results[key]['mu'] for key in sorted_keys]
-    mu0_list = [results[key]['mu0'] for key in sorted_keys]
-    n_list = [results[key]['n'] for key in sorted_keys]
-    n0_list = [results[key]['n0'] for key in sorted_keys]
-
-    axs[0].plot(var, diff_list, '.--', markersize=4, color=color, label=label)
-    axs[1].plot(var, steps_list, '.--', markersize=4, color=color, label=label)
-    axs[2].plot(var, n_list, '.--', markersize=4, color=color, label=label)
-    axs[3].plot(var, mu_list, '.--', markersize=4, color=color, label=label)
-    axs[4].plot(var, n0_list, '.--', markersize=4, color=color, label=label)
-    axs[5].plot(var, mu0_list, '.--', markersize=4, color=color, label=label)
-    for i in range(6):
-        axs[i].legend()
-
-    fig.suptitle(f'Convergence - {title}')
     fig.tight_layout()
 
-    return fig, axs
-
+    return (fig, axs), (fit_par_chi, fit_par_xi)
 
 def plot_diagram(points, z, z_label='Values', level=None, level_label=None,
                  point_label=('',''), title='', label='', figure=None,
