@@ -429,7 +429,7 @@ def refine_min(lat, mu, beta, nk, q_min, q_path=None, S_val=None, refine_ratio=1
 
     else:
         start = q_grid[0]
-        J = lat.b_vecs / (4*np.pi)
+        J = lat.b_vecs / (2*np.pi)
         J_inv = np.linalg.inv(J)
         s0 = J_inv @ (q_min - start)
         step = 1.0 / nk
@@ -551,36 +551,39 @@ def density_k(e_k, S_k, mu, beta, ibz_w_k):
     emx = np.exp(-xr)
 
     nF_real = (cos_xi + emx) / (ex + 2*cos_xi + emx)
+    #nF_real = 0.5 - 0.5 * np.tanh(0.5*(xr - 1j*xi))
+    #print(nF_real.real)
 
     return 2. * np.dot(nF_real, ibz_w_k)/np.sum(ibz_w_k)
 
 @njit
-def density_iwk(e_k, S_iwk, mu, beta, ibz_w_k):
-    niw, Nk = S_iwk.shape
+def density_iwk(e_k, Gamma_k, mu, beta, ibz_w_k):
+
+    Nk = e_k.shape[0]
+    niw = Gamma_k.shape[0]
+
     n_tot = 0.0
+
     for k in range(Nk):
-        e = e_k[k]
-        xi_k = e - mu
-        g_sum = 0.0
-        g0_sum = 0.0
+
+        xi = e_k[k] - mu
+        Gamma = Gamma_k[0, 0]
+
+        s = 0.0 + 0.0j
+
         for n in range(niw):
-            w = (2*n + 1) * np.pi / beta
-            Sigma = S_iwk[n, k]
-            denom_r = mu - e - Sigma.real
-            denom_i = w - Sigma.imag
-            g_sum  += denom_r / (denom_r**2 + denom_i**2)
-            g0_sum += (-xi_k)  / (w**2    + xi_k**2)
-        
-        x = beta * xi_k
-        if x > 500.0:
-            nF = 0.0
-        elif x < -500.0:
-            nF = 1.0
-        else:
-            nF = 1.0 / (np.exp(x) + 1.0)
-        g_corr = g_sum - g0_sum + nF
-        n_tot += 2.0/beta * g_corr * ibz_w_k[k]
-    return n_tot / np.sum(ibz_w_k)
+
+            wn = (2*n + 1) * np.pi / beta
+
+            z = 1j*wn - xi + 1j*Gamma
+
+            s += 1.0 / z
+
+        nk = 0.5 + 2*(s / beta).real
+
+        n_tot += ibz_w_k[k] * nk
+
+    return 2*n_tot/sum(ibz_w_k)
 
 def get_mu(e_k, n_goal, beta, niw=1, S_iwk=None, ibz_w_k=None):
     
@@ -604,7 +607,7 @@ def get_mu(e_k, n_goal, beta, niw=1, S_iwk=None, ibz_w_k=None):
     
     return brentq(f, a, b)
           
-def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, niw=1, S_iwk_list=None, q_path=None, method='matsubara', refine=True, refine_ratio=1., nk_avg=(1,1), get_xi=False, xi_range=[0,0,2e-2], xi_pts=15, fit=False, fit_type=HMM, niw_extr=True, ibz=True, save_file=None, verbose=True):
+def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, niw=1, S_iwk_list=None, q_path=None, method='matsubara', refine=True, refine_ratio=1., nk_avg=(1,1), get_xi=False, xi_range=[0,0,1e-2], xi_pts=15, fit=False, fit_type=HMM, niw_extr=True, ibz=True, save_file=None, verbose=True):
 
     start_time = time.time()
 
@@ -738,12 +741,17 @@ def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, niw=1, S_iwk_list=None, q
                             mu_vals = results['mu'][pos_mask][:2]
                             m = (mu_vals[1] - mu_vals[0])/(x_fit[1] - x_fit[0])
                             results['mu_c'].append(mu_vals[0] - m * (x_fit[0] - results[f'fit{label}']['Xc']))
+                        
+                        converged = True
 
                     except RuntimeError:
                         print(f"Fit of inv{label} values did not converge")
+                        converged = False
                 else:
                     print("Not enough points to fit!")
-                    
+                    converged = False
+
+                if not converged:
                     for i, key in enumerate(par_keys):
                         results[f'fit{label}'][key].append(np.nan)
                         results[f'fit{label}'][f'{key}_err'].append(np.nan)
