@@ -15,19 +15,19 @@ class LATTICE:
         self.tp  = tp
         self.dim = dim
 
-        units    = []
-        hoppings = {}
+        self.units    = []
+        self.hoppings = {}
 
         nn_vecs = []
         for i in range(dim):
             ax = tuple(int(j==i) for j in range(dim))
             nax = tuple(-x for x in ax)
-            units += [ax]
+            self.units += [ax]
             nn_vecs += [ax, nax]
 
         if t != 0:
             for vec in nn_vecs:
-                hoppings[vec] = [[-t]]
+                self.hoppings[vec] = [[-t]]
 
         if dim == 2:
             nnn_vecs = [(1,1),(1,-1),(-1,1),(-1,-1)]
@@ -38,23 +38,24 @@ class LATTICE:
 
         if tp != 0:
             for vec in nnn_vecs:
-                hoppings[vec] = [[-tp]]
+                self.hoppings[vec] = [[-tp]]
 
-        self.a_vecs = np.array(units).T
+        self.a_vecs = np.array(self.units).T
         self.b_vecs = 2*np.pi * np.linalg.inv(self.a_vecs).T
 
-        self.H_r = TBLattice(units=units, hoppings=hoppings)
+        H_r = TBLattice(units=self.units, hoppings=self.hoppings)
 
-        self.t_vals = np.array([t[0,0] for t in self.H_r.hoppings.values()])
-        self.R_vecs = np.array([np.array(R[:dim]) for R in self.H_r.hoppings])
+        self.t_vals = np.array([t[0,0] for t in H_r.hoppings.values()])
+        self.R_vecs = np.array([np.array(R[:dim]) for R in H_r.hoppings])
 
         self.R_vecs_NN  = np.array(nn_vecs)
         self.R_vecs_NNN = np.array(nnn_vecs)
         
         unit_mat = np.eye(3)
-        unit_mat[:dim, :dim] = np.array(units, dtype=float)
-        self._spg_cell = (unit_mat, [[0., 0., 0.]], [1])
+        unit_mat[:dim, :dim] = np.array(self.units, dtype=float)
+        self.spg_cell = (unit_mat, [[0., 0., 0.]], [1])
 
+        self.nk, self.nk_fine = None, None
         self.k_vecs, self.k_vecs_fine = None, None
         self.e_k, self.e_k_fine = None, None
 
@@ -64,10 +65,18 @@ class LATTICE:
 
     def get_bz(self, nk, ibz=False, fine=False):
 
+        if not fine:
+            self.nk = nk
+        else:
+            self.nk_fine = nk
+
+        self.ibz = ibz
+
         nk_tuple = (nk,) * self.dim + (1,) * (3 - self.dim)
+        H_r = TBLattice(units=self.units, hoppings=self.hoppings)
 
         if not ibz:
-            k_mesh = self.H_r.get_kmesh(nk_tuple)
+            k_mesh = H_r.get_kmesh(nk_tuple)
             k_vecs = np.array([k.value for k in k_mesh])
             ibz_w_k = np.ones(nk**self.dim)
 
@@ -77,7 +86,7 @@ class LATTICE:
                 self.k_vecs_fine, self.ibz_w_k_fine = k_vecs, ibz_w_k
 
         else:
-            mapping, ir_grid = spglib.get_ir_reciprocal_mesh(nk_tuple, self._spg_cell)
+            mapping, ir_grid = spglib.get_ir_reciprocal_mesh(nk_tuple, self.spg_cell)
 
             ibz_idx = np.unique(mapping)
             ibz_w_k = np.bincount(mapping)[ibz_idx].astype(float)
@@ -93,11 +102,13 @@ class LATTICE:
     
     def get_e_k(self, fine=False):
 
+        H_r = TBLattice(units=self.units, hoppings=self.hoppings)
+
         if not fine:
-            H_k = self.H_r.fourier(self.k_vecs/(2*np.pi))
+            H_k = H_r.fourier(self.k_vecs/(2*np.pi))
             self.e_k = H_k[:,0,0].real
         else:
-            H_k = self.H_r.fourier(self.k_vecs_fine/(2*np.pi))
+            H_k = H_r.fourier(self.k_vecs_fine/(2*np.pi))
             self.e_k_fine = H_k[:,0,0].real
 
     def get_f_iwR(self, f_iwk, nk):

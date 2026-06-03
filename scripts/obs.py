@@ -564,26 +564,17 @@ def density_iwk(e_k, Gamma_k, mu, beta, ibz_w_k):
 
     Nk = e_k.shape[0]
     niw = Gamma_k.shape[0]
-
     n_tot = 0.0
-
     for k in range(Nk):
 
         xi = e_k[k] - mu
         Gamma = Gamma_k[0, 0]
-
         s = 0.0 + 0.0j
-
         for n in range(niw):
-
             wn = (2*n + 1) * np.pi / beta
-
             z = 1j*wn - xi + 1j*Gamma
-
             s += 1.0 / z
-
         nk = 0.5 + 2*(s / beta).real
-
         n_tot += ibz_w_k[k] * nk
 
     return 2*n_tot/sum(ibz_w_k)
@@ -591,7 +582,6 @@ def density_iwk(e_k, Gamma_k, mu, beta, ibz_w_k):
 def get_mu(e_k, n_goal, beta, niw=1, S_iwk=None, ibz_w_k=None):
     
     Nk_ibz = len(e_k)
-
     S_iwk, k_dep = get_iwk_arr(S_iwk, Nk=Nk_ibz, niw=niw)
 
     if ibz_w_k is None:
@@ -604,104 +594,140 @@ def get_mu(e_k, n_goal, beta, niw=1, S_iwk=None, ibz_w_k=None):
 
     def f(mu): return density(mu) - n_goal
 
-    # temperature-aware bracketing
     a = e_k.min() - 50.0/beta
     b = e_k.max() + 50.0/beta
     
     return brentq(f, a, b)
+
+def initialize_bz(lat, nk, refine=True, refine_ratio=1, ibz=True):
+
+    if lat.nk is None:
+        lat.get_bz(nk, ibz=ibz)
+        lat.get_e_k()
+
+    if lat.nk_fine is None and refine:
+        nk_fine = int(refine_ratio*nk)
+        lat.get_bz(nk_fine, ibz=ibz, fine=True)
+        lat.get_e_k(fine=True)
+
+def run_rpa(par, lat=None, t=1., tp=0., dim=3, nk=100, niw=1, S_val=None, q_path=None, method='matsubara', refine=True,
+            refine_ratio=1, get_xi=False, xi_range=[0,0,1e-2], xi_pts=15, niw_extr=False, ibz=True, verbose=True, save_inputs=True):
+    
+    if verbose:
+        print('='*50)
+        start_time = time.time()
+
+    # Stores every input inside a dictionary
+    if save_inputs:
+        run_data = locals().copy()
+    else:
+        run_data = {}
+
+    if lat is None:
+        lat = LATTICE(t=t, tp=tp, dim=dim)
+
+    if lat.nk is not None:
+        nk = lat.nk
+    
+    if lat.nk_fine is not None:
+        refine = True
+        refine_ratio = lat.nk_fine / lat.nk
+        ibz = lat.ibz
+
+    initialize_bz(lat, nk, refine, refine_ratio, ibz)
+
+    U, T, n = par['U'], par['T'], par['n']
+
+    if verbose: print(f'U={U:.3f}, T={T:.3f}, n={n:.3f}: self-consistent mu search...', end='')
+
+    finer_e_k = lat.e_k_fine if lat.e_k_fine is not None else lat.e_k
+    finer_ibz_w_k = lat.ibz_w_k_fine if lat.ibz_w_k_fine is not None else lat.ibz_w_k
+    mu = get_mu(e_k=finer_e_k, n_goal=n, beta=1/T, S_iwk=S_val, ibz_w_k=finer_ibz_w_k)
+
+    if verbose: print(f'U={U:.3f}, T={T:.3f}, n={n:.3f}: 1/chi0 minimum search over grid with nk={nk}...', end='')
+    Q, invchi0_Q, _ = get_invchi0_min(lat, mu, 1/T, nk, q_path, method, niw, S_val, niw_extr, ibz)
+    
+    if refine:
+        if verbose: print(f'U={U:.3f}, T={T:.3f}, n={n:.3f}: 1/chi0 minimum refinement with nk\'={lat.nk_fine}...', end='')
+        Q, invchi0_Q = refine_min(lat, mu, 1/T, nk, Q, q_path, S_val, refine_ratio, ibz)
+    
+    invchi_Q = invchi0_Q.real - U
+    
+    if get_xi:
+        if invchi_Q > 0.:
+            if verbose: print(f'U={U:.3f}, T={T:.3f}, n={n:.3f}: 1/xi estimation with OZ fit over chi(q)...', end='')
+            fit_out, _ = fit_invxi(lat, mu, 1/T, U, lat.nk_fine, Q, S_val, xi_range, xi_pts, ibz)
+            par, _ = fit_out
+            invxi = par[2]
+        else:
+            invxi = np.nan
+
+    if verbose:
+        Q_str = "(" + ", ".join(f"{x:.3g}" for x in Q) + ")"
+        invxi_str = "None" if invxi is None else f"{invxi:.3f}"
+        elapsed_time = time.time() - start_time
+        print(f"U={U:.3f}, T={T:.3f}, n={n:.3f}: completed after {elapsed_time:.1f}s"
+              f"results: 1/chi0 = {invchi_Q:.3f}, Q = {Q_str}, 1/xi = {invxi_str}", end='')
+
+    run_data['invchi'] = invchi_Q
+    run_data['Q'] = Q
+    run_data['mu'] = mu
+    if get_xi:
+        run_data['invxi'] = invxi
+    else:
+        run_data['invxi'] = np.nan
+    
+    return run_data
           
-def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, niw=1, S_iwk_list=None, q_path=None, method='matsubara', refine=True, refine_ratio=1., nk_avg=(1,1), get_xi=False, xi_range=[0,0,1e-2], xi_pts=15, fit=False, fit_type=HMM, niw_extr=False, ibz=True, save_file=None, verbose=True):
+def sweep_rpa(par_list, lat=None, t=1., tp=0., dim=3, nk=100, niw=1, S_iwk_list=None, q_path=None, method='matsubara', 
+                 refine=True, refine_ratio=1., get_xi=False, xi_range=[0,0,1e-2], xi_pts=15, fit=False, 
+                 fit_type=HMM, niw_extr=False, ibz=True, save_file=None, verbose=True, workers=6):
 
-    start_time = time.time()
-
-    lat = LATTICE(t=t, tp=tp, dim=dim)
+    if verbose:
+        print('='*50)
+        start_time = time.time()
 
     # Extract the parameter list for the loop
-    list_label = next(k for k, v in par_dict.items() if isinstance(v, (list, np.ndarray)))
-    sweep_length = len(par_dict[list_label])
+    sweep_length = len(par_list)
+    varying_key = []
+    for key in par_list[0].keys():
+        values = {par[key] for par in par_list}
+        if len(values) > 1:
+            varying_key.append(key)
+    
+    if len(varying_key) > 1:
+        print("Only one parameter can vary among U, T and n for each sweep!")
+        sys.exit()
+    else:
+        varying_key = varying_key[0]
+    
+    varying_par = [par[varying_key] for par in par_list]
 
     if isinstance(S_iwk_list, (list, np.ndarray)) and len(S_iwk_list) == sweep_length:
         pass
     else:
         S_iwk_list = [S_iwk_list] * sweep_length
     
-    # Sweep initialization
-    results = {'t': lat.t, 'dim': lat.dim, 'nk': nk, 'niw': niw,
-               'tp': tp, 'method': method, 'q_path': q_path, 'nk_avg': nk_avg,
-               'S_iwk_list': S_iwk_list, 'refine': refine, 'refine_ratio': refine_ratio,
-               'niw_extr': niw_extr, 'xi_range': xi_range, 'xi_pts': xi_pts, 
-               'invchi': None, 'Q': None, 'mu': None, 'invxi': None, 'par_list': [],
-               'fitchi': {}, 'fitxi': {}}
+    if lat is None:
+        lat = LATTICE(t=t, tp=tp, dim=dim)
 
-    nk_list = [nk - i*nk_avg[1] for i in range(nk_avg[0])]
+    initialize_bz(lat, nk, refine, refine_ratio, ibz)
 
-    Q_avg = np.zeros((sweep_length, 3))
-    invchi0_avg = np.zeros(sweep_length)
-    mu_avg = np.zeros(sweep_length)
-    if get_xi:
-        invxi_avg = np.zeros(sweep_length)
-
-    total_jobs = sweep_length*len(nk_list)
-    for i_nk, nk_val in enumerate(nk_list):
-        
-        lat.get_bz(nk_val, ibz=ibz)
-        lat.get_e_k()
-        nk_xi = nk_val
-
-        if refine:
-            nk_fine = int(refine_ratio*nk_val)
-            lat.get_bz(nk_fine, ibz=ibz, fine=True)
-            lat.get_e_k(fine=True)
-            nk_xi = nk_fine
-
-        # Parameter sweep
-        for i_var, var in enumerate(par_dict[list_label]):
-
-            par = {**par_dict, list_label: var}
-            U, T, n = par['U'], par['T'], par['n']
-
-            finer_e_k = lat.e_k_fine if refine else lat.e_k
-            finer_ibz_w_k = lat.ibz_w_k_fine if refine else lat.ibz_w_k
-            mu = get_mu(e_k=finer_e_k, n_goal=n, beta=1/T, S_iwk=S_iwk_list[i_var], ibz_w_k=finer_ibz_w_k)
-            mu_avg[i_var] += mu
-
-            Q, invchi0_Q, _ = get_invchi0_min(lat, mu, 1/T, nk_val, q_path, method, niw, S_iwk_list[i_var], niw_extr, ibz)
-            
-            if refine:
-                Q, invchi0_Q = refine_min(lat, mu, 1/T, nk, Q, q_path, S_iwk_list[i_var], refine_ratio, ibz)
-            
-            if get_xi:
-                if invchi0_Q - U > 0.:
-                    fit_out, _ = fit_invxi(lat, mu, 1/T, U, nk_xi, Q, S_iwk_list[i_var], xi_range, xi_pts, ibz)
-                    par, _ = fit_out
-                    invxi = par[2]
-                else:
-                    invxi = np.nan
-
-            # Results for each U,T,n point
-            invchi0_avg[i_var] += invchi0_Q.real
-            Q_avg[i_var] += Q
-            if get_xi:
-                invxi_avg[i_var] += invxi
-
-            if i_nk == 0:
-                results['par_list'].append({'U': U, 'T': T, 'n': n})
-
-            if verbose:
-                job = i_var+i_nk*sweep_length+1
-                print(f"\rJob {job}/{total_jobs}: U={U:.3f}, T={T:.3f}, n={n:.3f}", end='')
-
-    results['invchi'] = invchi0_avg / len(nk_list) - U
-    results['Q'] = Q_avg / len(nk_list)
-    results['mu'] = mu_avg / len(nk_list)
-    if get_xi:
-        results['invxi'] = invxi_avg / len(nk_list)
-    else:
-        None
+    inputs = [{'lat': lat, 't': t, 'tp': tp, 'dim': dim, 'nk': nk, 'niw': niw, 'S_val': S_iwk_list[i], 'q_path': q_path,
+               'method': method, 'refine': refine, 'refine_ratio': refine_ratio, 'get_xi': get_xi, 'xi_range': xi_range, 'xi_pts': xi_pts,
+               'niw_extr': niw_extr, 'ibz': ibz, 'verbose': False, 'par': par_list[i]} for i in range(sweep_length)]
+    
+    results_list = run_parallel(run_rpa, inputs, workers=workers)
+    
+    results = {key: np.array([d[key] for d in results_list]) for key in results_list[0]}
 
     if fit:
         if not isinstance(fit_type, (list, np.ndarray)):
             fit_type = [fit_type]
+        
+        results['fitchi'] = {}
+        if get_xi:
+            results['fitxi'] = {}
 
         par_keys = ['a', 'b', 'Xc']
         for label in par_keys:
@@ -722,7 +748,7 @@ def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, niw=1, S_iwk_list=None, q
 
             for label in labels_to_fit:
                 pos_mask = results[f'inv{label}'] > 0
-                x_fit = np.array(par_dict[list_label])[pos_mask][:15]
+                x_fit = np.array(varying_par)[pos_mask][:15]
                 y_fit = results[f'inv{label}'][pos_mask][:15]
 
                 if len(x_fit) >= 2:
@@ -772,11 +798,17 @@ def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, niw=1, S_iwk_list=None, q
             results['Qc'] = results['Qc'][0]
             results['mu_c'] = results['mu_c'][0]
 
+    sweep_data = locals().copy()
+    sweep_data.update(results)
+
     if save_file is not None:
-        HDFwrite_dict(save_file, results)
+        HDFwrite_dict(save_file, sweep_data)
     
+    const_keys = list(par_list[0].keys() - {varying_key})
+    const_pars = [par_list[0][key] for key in const_keys]
     elapsed_time = time.time() - start_time
     if verbose:
-        print(f"\rCompleted {sweep_length} jobs in {elapsed_time:.2f} seconds | U={U:.3f}, T={T:.3f}, n={n:.3f}")
+        print(f"\r{const_keys[0]}: {const_pars[0]:.3f}, {const_keys[1]}: {const_pars[1]:.3f}: "
+              f"Completed {sweep_length} jobs in {elapsed_time:.1f} seconds")
 
-    return results
+    return sweep_data

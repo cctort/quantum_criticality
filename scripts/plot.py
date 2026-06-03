@@ -322,7 +322,7 @@ def pcut_dmft(results, var_label, title='', label='', figure=None):
 def pcut_chi(results, var_label, plot_Q=(1,1,1), fit=False, x_exp=(1,1),
              title='', label='', figure=None, alpha=1., color=None, styles=('o-','o-')):
 
-    has_xi = results.get('invxi') is not None
+    has_xi = results['get_xi'][0]
     if not isinstance(x_exp, tuple):
         x_exp = (x_exp,)
 
@@ -344,7 +344,7 @@ def pcut_chi(results, var_label, plot_Q=(1,1,1), fit=False, x_exp=(1,1),
         elif x_exp[0] == 0.5:
             x_label = rf'$\sqrt{{{var_label}}}$'
         else:
-            x_label = rf'${var_label}^{{{x_exp:.2f}}}$'
+            x_label = rf'${var_label}^{x_exp[0]:.2g}$'
 
         ax_chi.set_xlabel(x_label)
         ax_chi.set_ylabel(r'$\chi^{-1}(\mathbf{Q})$')
@@ -359,7 +359,7 @@ def pcut_chi(results, var_label, plot_Q=(1,1,1), fit=False, x_exp=(1,1),
             elif x_exp[1] == 0.5:
                 x_label = rf'$\sqrt{{{var_label}}}$'
             else:
-                x_label = rf'${var_label}^{{{x_exp:.2f}}}$'
+                x_label = rf'${var_label}^{x_exp[1]:.2g}$'
 
             ax_xi = fig.add_subplot(left_gs[1])
             ax_xi.set_xlabel(x_label)

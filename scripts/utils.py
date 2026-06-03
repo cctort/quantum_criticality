@@ -95,18 +95,13 @@ def make_poly(degrees):
         return sum(par * x**deg for par, deg in zip(params, degrees))
     return poly
 
-def sweep_parallel(worker, sweep_list, save_file=None, n_jobs=-1):
+def run_parallel(worker, inputs, workers=-1):
 
     with threadpool_limits(1):
-        results_list = Parallel(n_jobs=n_jobs, verbose=10, backend='loky')(
-            delayed(worker)(**{**sweep_dict, 'verbose': False})
-            for sweep_dict in sweep_list
-        )
-    if save_file is not None:
-        HDFwrite_list(save_file, results_list)
-        return None
-    else:
-        return results_list
+        results_list = Parallel(n_jobs=workers, verbose=0, backend='loky')(
+            delayed(worker)(**{**input}) for input in inputs)
+        
+    return results_list
 
 def GL(x, a, b, Xc):
     return a * np.sign(x - Xc) * abs(x - Xc)**b
