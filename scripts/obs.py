@@ -149,24 +149,27 @@ def matsubara_ksp(mu, beta, e_k, e_kq, S_iwk, S_iwkq):
 
     return (-2.0 / beta * chi0).real / Nk
 
-def matsubara_rsp(beta, G_iwk, nk):
+def matsubara_rsp(lat, beta, G_iwk, nk, ibz):
 
+    dim = lat.dim
     niw = G_iwk.shape[0]
-    chi0_r = np.zeros((nk,nk,nk), dtype=np.complex128)
-    G_r = np.zeros((nk,nk,nk), dtype=np.complex128)
+    Nk = nk**dim
+
+    G_r = np.empty((nk,)*dim, dtype=np.complex128)
+    chi0_r = np.zeros((nk,)*dim, dtype=np.float64)
 
     for n in range(niw):
-
-        G_k = G_iwk[n].reshape(nk,nk,nk)
+        if ibz:
+            G_k = lat.unfold_f_k(G_iwk[n]).reshape((nk,)*dim)
+        else:
+            G_k = G_iwk[n].reshape((nk,)*dim)
         np.fft.ifftn(G_k, out=G_r)
-        G_r_rev = np.roll(G_r[::-1, ::-1, ::-1], 1, axis=(0,1,2))
-        chi0_r += G_r * G_r_rev
+        chi0_r += G_r.real**2 + G_r.imag**2
 
-    chi0_q = np.fft.fftn(chi0_r)
-    chi0_q *= -2.0 / beta
+    chi0_q  = np.fft.fftn(chi0_r)
+    chi0_q *= -2.0 / (beta * Nk)
 
-    invchi0_q = 1/chi0_q.real
-    
+    invchi0_q = 1.0 / chi0_q.real
     return invchi0_q.reshape(-1)
 
 @njit
@@ -287,7 +290,7 @@ def get_grid_from_path(q_path, k_grid, tol=None):
 
     return q_grid
 
-def get_invchi0_min(lat, mu, beta, nk, q_path=None, method='matsubara', niw=1, S_val=None, niw_extr=True, ibz=True):
+def get_invchi0_min(lat, mu, beta, nk, q_path=None, method='matsubara', niw=1, S_val=None, niw_extr=False, ibz=True):
     
     e_k = lat.e_k
     Nk = len(e_k)
@@ -607,7 +610,7 @@ def get_mu(e_k, n_goal, beta, niw=1, S_iwk=None, ibz_w_k=None):
     
     return brentq(f, a, b)
           
-def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, niw=1, S_iwk_list=None, q_path=None, method='matsubara', refine=True, refine_ratio=1., nk_avg=(1,1), get_xi=False, xi_range=[0,0,1e-2], xi_pts=15, fit=False, fit_type=HMM, niw_extr=True, ibz=True, save_file=None, verbose=True):
+def sweep_chirpa(par_dict, t=1., tp=0., dim=3, nk=100, niw=1, S_iwk_list=None, q_path=None, method='matsubara', refine=True, refine_ratio=1., nk_avg=(1,1), get_xi=False, xi_range=[0,0,1e-2], xi_pts=15, fit=False, fit_type=HMM, niw_extr=False, ibz=True, save_file=None, verbose=True):
 
     start_time = time.time()
 

@@ -2,7 +2,6 @@ import numpy as np
 from triqs.gf import *
 from triqs.plot.mpl_interface import *
 from triqs_tprf.tight_binding import TBLattice
-from triqs.lattice import BravaisLattice
 from scripts.utils import *  
 import spglib
 
@@ -12,34 +11,33 @@ class LATTICE:
     """
     def __init__(self, t=1., tp=0., dim=3):
 
-        self.t = t
-        self.tp = tp
+        self.t   = t
+        self.tp  = tp
         self.dim = dim
 
-        units = []
+        units    = []
         hoppings = {}
 
-        # nearest neighbors
+        nn_vecs = []
         for i in range(dim):
-            ax  = tuple(int(j==i) for j in range(dim))
+            ax = tuple(int(j==i) for j in range(dim))
             nax = tuple(-x for x in ax)
-            units.append(ax)
-            hoppings[ax]  = [[-t]]
-            hoppings[nax] = [[-t]]
+            units += [ax]
+            nn_vecs += [ax, nax]
 
-        # next-nearest neighbors (only meaningful in 2D or 3D)
-        if dim >= 2 and tp != 0:
-            nn_vectors = []
-            if dim == 2:
-                nn_vectors = [(1,1), (1,-1), (-1,1), (-1,-1)]
-            elif dim == 3:
-                # all 12 next-nearest neighbors in cubic lattice
-                nn_vectors = [
-                    (1,1,0), (1,-1,0), (-1,1,0), (-1,-1,0),
-                    (1,0,1), (1,0,-1), (-1,0,1), (-1,0,-1),
-                    (0,1,1), (0,1,-1), (0,-1,1), (0,-1,-1)
-                ]
-            for vec in nn_vectors:
+        if t != 0:
+            for vec in nn_vecs:
+                hoppings[vec] = [[-t]]
+
+        if dim == 2:
+            nnn_vecs = [(1,1),(1,-1),(-1,1),(-1,-1)]
+        elif dim == 3:
+            nnn_vecs = [(1,1,0),(1,-1,0),(-1,1,0),(-1,-1,0),
+                        (1,0,1),(1,0,-1),(-1,0,1),(-1,0,-1),
+                        (0,1,1),(0,1,-1),(0,-1,1),(0,-1,-1)]
+
+        if tp != 0:
+            for vec in nnn_vecs:
                 hoppings[vec] = [[-tp]]
 
         self.a_vecs = np.array(units).T
@@ -49,6 +47,9 @@ class LATTICE:
 
         self.t_vals = np.array([t[0,0] for t in self.H_r.hoppings.values()])
         self.R_vecs = np.array([np.array(R[:dim]) for R in self.H_r.hoppings])
+
+        self.R_vecs_NN  = np.array(nn_vecs)
+        self.R_vecs_NNN = np.array(nnn_vecs)
         
         unit_mat = np.eye(3)
         unit_mat[:dim, :dim] = np.array(units, dtype=float)
@@ -81,7 +82,7 @@ class LATTICE:
             ibz_idx = np.unique(mapping)
             ibz_w_k = np.bincount(mapping)[ibz_idx].astype(float)
             ibz_pos  = np.searchsorted(ibz_idx, mapping)
-            k_vecs = ir_grid[ibz_idx] / np.array(nk_tuple, dtype=float) * 2*np.pi
+            k_vecs = (ir_grid[ibz_idx] / np.array(nk_tuple, dtype=float) * 2*np.pi)[:,:self.dim]
 
             if not fine:
                 self.k_vecs, self.ibz_w_k = k_vecs, ibz_w_k

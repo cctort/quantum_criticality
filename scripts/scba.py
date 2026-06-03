@@ -7,112 +7,116 @@ Sweep logic mirrors sweep_dmft from dmft.py.
 """
 
 import numpy as np
-from triqs.gf import Gf, MeshImFreq, MeshProduct, make_gf_from_fourier
-from triqs_tprf.lattice import fourier_wk_to_wr, fourier_wr_to_wk, lattice_dyson_g_wk
-from scipy.optimize import fsolve
+from scripts.obs import *
+from numba import njit
+
+@njit
+def scba_solver(niw, Nk, v, k_vecs, v2_R_vecs, v2_vals, G_iwR):
+
+    S_iwk = np.zeros((niw, Nk), dtype=np.complex128)
+    for k in range(Nk):
+        for n in range(niw):
+            for i in range(len(v2_R_vecs)):
+                phase = np.exp(1j * np.dot(v2_R_vecs[i].astype(np.float64), k_vecs[k]))
+                S_iwk[n, k] += v * v2_vals[i] * G_iwR[n, i] * phase
+    
+    return S_iwk
+
 
 class SCBA:
 
-    def __init__(self, lattice, beta, xi=0.2, n_iw = 512, nk=50):
+    def __init__(self, lat, niw, nk, disorder='nnn'):
 
-        self.lattice  = lattice
-        self.beta     = beta
-        self.n_iw     = n_iw
-        self.dim        = lattice.dim
-        self.nk       = nk
+        self.lat = lat
+        self.niw = niw
+        self.nk = nk
+        self.Nk = nk**lat.dim
+        self.Nk_ibz = len(self.lat.ibz_w_k)
 
-        # (iw, k) mesh
-        self.k_mesh   = lattice.e_k.mesh
-        self.iw_mesh  = MeshImFreq(beta=beta, S='Fermion', n_iw=n_iw)
-        self.wk_mesh  = MeshProduct(self.iw_mesh, self.k_mesh)
+        self.get_v2R(disorder)
 
-        # Scattering matrix
-        self.xi = xi
-        self.tmat_r   = self.get_tmat_r()
+        self.S_iwk = np.zeros((niw, self.Nk_ibz), dtype=np.complex128)
 
-        # Gf on (iw, k) mesh
-        self.S_iwk = Gf(mesh=self.wk_mesh, target_shape=[1, 1])
-        self.G_iwk = Gf(mesh=self.wk_mesh, target_shape=[1, 1])
+    def get_v2R(self, disorder):
 
-        # Gf on iw mesh
-        self.G_loc = Gf(mesh=self.iw_mesh, target_shape=[1, 1])
+        dim = self.lat.dim
+        R0 = np.zeros(dim, dtype=int)
 
-    def get_tmat_r(self):
-        
-        tmat_k = Gf(mesh=self.k_mesh, target_shape=[1, 1])
-        k_arr  = np.array([k.value for k in self.k_mesh])[:, :self.dim]
-        #tmat_k.data[:,0,0] = (np.cos(k_arr).mean(axis=-1)) ** 2
-        k_arr = (k_arr + np.pi) % (2 * np.pi) - np.pi
-        tmat_k.data[:,0,0] = np.exp(-(self.xi*np.pi)**2 * (k_arr**2).sum(axis=-1))
-        return make_gf_from_fourier(tmat_k)
-    
-    def solve_n(self, mu_val, n_goal):
-
-        G_iwk = lattice_dyson_g_wk(mu=-mu_val[0], e_k=self.lattice.e_k, sigma_wk=self.S_iwk)
-        self.G_loc.data[:,0,0] = G_iwk.data[:,:,0,0].mean(axis=1)
-
-        return 2*self.G_loc.total_density().real - n_goal
-
-
-    def run(self, v, n_goal = 1., max_iter= 200,
-            tol = 1e-10, mix = 1.,
-            init_Sigma=None, constant=False, verbose = True):
-        
-        if init_Sigma is not None:
-            self.S_iwk << init_Sigma
+        if disorder == 'onsite':
+            V_support = [R0]
+        elif disorder == 'nn':
+            V_support = [np.array(R[:dim]) for R in self.lat.R_vecs_NN]
+        elif disorder == 'nnn':
+            V_support = [np.array(R[:dim]) for R in self.lat.R_vecs_NNN]
         else:
-            self.S_iwk.zero()
+            raise ValueError(f"Unknown disorder type: {disorder}")
 
-        mu = 1e-5
-        v **= 2
+        V2_dict = {}
+        for R1 in V_support:
+            for R2 in V_support:
+                R = tuple(R1 - R2)
+                V2_dict[R] = V2_dict.get(R, 0) + 1
 
-        self.convergence = {'diff': [], 'mix': [], 'n': [], 'mu': []}
-        S_new = self.S_iwk.copy()
+        self.v2_R_vecs = np.array(list(V2_dict.keys()), dtype=int)    # (n_R, dim)
+        self.v2_vals   = np.array(list(V2_dict.values()), dtype=float)  # (n_R,)
+
+    def run(self, v, beta, n_goal=1., max_iter=200, tol=1e-10, mix=0., init_S=None, init_mu=0., ibz=True, verbose=True):
+        
+        dim = self.lat.dim
+        nk = self.nk
+        niw = self.niw
+        mu = init_mu
+        v2 = v**2
 
         if verbose:
             print('=' * 50)
-            print(f"SCBA: nk={self.nk}^{self.dim}, beta={self.beta:.2f}, "
-                  f"mu={mu:.4f}, scatt. pot.={np.sqrt(v):.3f}")
+            print(f"SCBA: nk={nk}^{dim}, niw={niw}, T={beta:.2f}, mu={mu:.4f}, v={v:.3f}")
 
+        self.S_iwk, _ = get_iwk_arr(init_S, self.Nk_ibz, niw)
+
+        self.run_stats = {'diff': [], 'mix': [], 'n': [], 'mu': []}
+
+        converged = False
         for step in range(max_iter):
 
-            mu = fsolve(self.solve_n, mu, args=(n_goal,))[0]
+            mu = get_mu(self.lat.e_k, n_goal, beta, niw, self.S_iwk, self.lat.ibz_w_k)
 
-            self.G_iwk = lattice_dyson_g_wk(mu=mu, e_k=self.lattice.e_k, sigma_wk=self.S_iwk)
+            G_iwk = get_G_iwk(mu, beta, self.lat.e_k, self.S_iwk, self.niw)
 
-            if constant:
-                S_new.data[:] = 0.0
-                S_new.data[:,:,0,0] = v * self.G_iwk.data.mean(axis=1)[:,0,0][:, None]
-            else:
-                G_wr = fourier_wk_to_wr(self.G_iwk)
-                G_wr.data[...] *= self.tmat_r.data[np.newaxis, :, ...]
-                S_new << v * fourier_wr_to_wk(G_wr)
+            if ibz:
+                G_iwk = self.lat.unfold_f_iwk(G_iwk)
+            G_iwR = self.lat.get_f_iwR(G_iwk, self.nk).reshape(niw,-1)
 
-            diff = float(np.max(np.abs(S_new.data - self.S_iwk.data)))
-            self.S_iwk << (1 - mix) * self.S_iwk + mix * S_new
+            strides = nk**np.arange(dim - 1, -1, -1)
+            sparse_idx = (self.v2_R_vecs % nk) @ strides
+            G_iwR_sparse = G_iwR[:, sparse_idx]
+            
+            S_new = scba_solver(niw, self.Nk_ibz, v2, self.lat.k_vecs, self.v2_R_vecs, self.v2_vals, G_iwR_sparse)
 
-            self.G_loc.data[:,0,0] = self.G_iwk.data[:,:,0,0].mean(axis=1)
-            n = 2*self.G_loc.total_density().real
+            diff = float(np.max(np.abs(S_new - self.S_iwk)))
+            self.S_iwk = mix * self.S_iwk + (1 - mix) * S_new
 
-            self.convergence['diff'].append(diff)
-            self.convergence['mix'].append(mix)
-            self.convergence['n'].append(n)
-            self.convergence['mu'].append(mu)
+            n = density_iwk(self.lat.e_k, self.S_iwk, mu, beta, self.lat.ibz_w_k)
+
+            self.run_stats['diff'].append(diff)
+            self.run_stats['mix'].append(mix)
+            self.run_stats['n'].append(n)
+            self.run_stats['mu'].append(mu)
 
             if step % 1 == 0 and verbose:
-                print(f"\rstep {step:4d}: diff = {diff:.3e}", end='')
+                print(f"\rstep {step:4d}: diff = {diff:.3e}, mu = {mu:.3e}", end='')
 
             if diff < tol:
-                self.converged = True
+                converged = True
                 if verbose:
-                    print(f"\rConverged at step {step} with diff = {diff:.3e}")
+                    print(f"\rConverged at step {step} with diff = {diff:.3e}, mu = {mu:.3e}")
                 break
-        else:
+
+        if not converged:
             if verbose:
                 print(f"\nNot converged after {max_iter} iterations (diff = {diff:.3e})")
-
-        self.G_iwk = lattice_dyson_g_wk(mu=mu, e_k=self.lattice.e_k, sigma_wk=self.S_iwk)
-        self.G_loc.data[:,0,0] = self.G_iwk.data[:,:,0,0].mean(axis=1)
+        
+        self.run_stats['converged'] = converged
 
 
 def sweep_scba(params, lattice, n_iw=512, verbose=False):
