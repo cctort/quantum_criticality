@@ -88,7 +88,7 @@ class SCBA:
                     G_k = self.lat.unfold_f_k(G_iwk[n])
                 else:
                     G_k = G_iwk[n]
-                G_R = self.lat.get_f_R(G_k, self.nk).reshape(-1)
+                G_R = get_f_R(G_k, nk, dim).reshape(-1)
 
                 strides = nk**np.arange(dim - 1, -1, -1)
                 sparse_idx = (self.v2_R_vecs % nk) @ strides

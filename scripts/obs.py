@@ -136,7 +136,7 @@ def lindhard_ksp(mu, beta, e_k, e_kq, S_k, S_kq, de_kq_dq=None):
     return chi0, dchi0
 
 @njit
-def matsubara_ksp(mu, beta, e_k, e_kq, S_iwk, S_iwkq):
+def matsubara_ksp(mu, beta, e_k, e_kq, S_iwk, S_iwkq, tail=True):
     
     Nk = len(e_k)
     niw = len(S_iwk)
@@ -149,13 +149,16 @@ def matsubara_ksp(mu, beta, e_k, e_kq, S_iwk, S_iwkq):
             G_iwkq = 1.0 / (iw + mu - e_kq[k] - S_iwkq[n,k])
             chi0 += G_iwk * G_iwkq
     
-    tail = beta/(2*np.pi**2) * zeta(2, niw + 0.5)
+    chi0 *= -2.0 / beta / Nk
+    if tail:
+        chi0 += beta / (2*np.pi**2) * zeta(2, niw + 0.5)
 
-    return (-2.0 / beta * chi0).real / Nk + tail
+    return chi0.real / Nk
 
-def matsubara_rsp(lat, beta, G_iwk, nk, ibz):
+def matsubara_rsp(lat, beta, G_iwk, ibz, tail=True):
 
     dim = lat.dim
+    nk = lat.nk
     niw = G_iwk.shape[0]
 
     G_r = np.empty((nk,)*dim, dtype=np.complex128)
@@ -173,8 +176,8 @@ def matsubara_rsp(lat, beta, G_iwk, nk, ibz):
     chi0_q  = np.fft.fftn(chi0_r)
     chi0_q *= -2.0 / beta
 
-    tail = beta/(2*np.pi**2) * zeta(2, niw + 0.5)
-    chi0_q += tail
+    if tail:
+        chi0_q += beta * zeta(2, niw + 0.5) / (2*np.pi**2)
 
     invchi0_q = 1.0 / chi0_q.real
     return invchi0_q.reshape(-1)
@@ -269,16 +272,30 @@ def get_grid_from_path(q_path, k_grid, tol=None):
     order = np.argsort(t_sel)
     q_grid = q_grid[order]
 
-    # explicitly include endpoints
-    #if np.linalg.norm(q_grid[0] - start) > tol:
-    #    q_grid = np.vstack([start, q_grid])
-
-    #if np.linalg.norm(q_grid[-1] - stop) > tol:
-    #    q_grid = np.vstack([q_grid, stop])
-
     return q_grid, path_mask
 
-def get_invchi0_min(lat, mu, beta, q_path=None, method='matsubara', niw=1, S_val=None, ibz=True):
+def niw_extrapolate(invchi0_func, niw, deg=2):
+
+    invchi0_list, niw_list = [], []
+    for s in [1, 2, 3, 4]:
+        n_sub = niw // s
+        if n_sub < 4:
+            break
+
+        mesh_sub = np.asarray(invchi0_func(n_sub))
+
+        invchi0_list.append(mesh_sub)
+        niw_list.append(n_sub)
+
+    x = 1. / np.array(niw_list)
+    y = np.stack(invchi0_list, axis=0)
+
+    coeff = np.polyfit(x, y, deg=deg)
+    invchi0_mesh = coeff[-1].squeeze()
+
+    return invchi0_mesh
+
+def get_invchi0_min(lat, mu, beta, q_path=None, method='matsubara', niw=1, S_val=None, ibz=True, niw_fit=False):
     
     e_k = lat.e_k
     Nk = len(e_k)
@@ -303,10 +320,10 @@ def get_invchi0_min(lat, mu, beta, q_path=None, method='matsubara', niw=1, S_val
         # 1/chi0 for each q using Lindhard
         invchi0_grid = []
         for q in q_grid:
-            e_kq = lat.get_e_kq(e_k, q, lat.nk)
+            e_kq = get_e_kq(e_k, q, lat.nk)
 
             if k_dep:
-                S_iwkq = lat.get_f_iwkq(S_iwk, q, lat.nk)
+                S_iwkq = get_f_iwkq(S_iwk, q, lat.nk)
             else:
                 S_iwkq = S_iwk
 
@@ -318,7 +335,15 @@ def get_invchi0_min(lat, mu, beta, q_path=None, method='matsubara', niw=1, S_val
         G_iwk = np.array(get_G_iwk(mu, beta, e_k, S_iwk, niw))
         
         # Evaluate 1/chi0 over whole BZ using FFT back and forth
-        invchi0_grid = matsubara_rsp(lat, beta, G_iwk, lat.nk, ibz)
+        #invchi0_grid = matsubara_rsp(lat, beta, G_iwk, lat.nk, ibz)
+
+        if niw_fit:
+            invchi0_func = lambda niw: matsubara_rsp(lat, beta, G_iwk[:niw+1], ibz, tail=False)
+            invchi0_grid = niw_extrapolate(invchi0_func, niw)
+        else:
+            invchi0_grid = matsubara_rsp(lat, beta, G_iwk, ibz, tail=True)
+
+        del G_iwk
 
         # Fold into IBZ to save memory
         if ibz:
@@ -356,15 +381,15 @@ def search_min(lat, mu, beta, q_min, q_path=None, S_val=None, refine_ratio=1, ib
             S_iwk = lat.unfold_f_iwk(S_iwk, fine=True)
 
         # If k_dep, precalculate S_iwR for the FFT
-        S_iwR = lat.get_f_iwR(S_iwk, lat.nk_fine, fine=True)
+        S_iwR = get_f_iwR(S_iwk, lat.nk_fine, fine=True)
 
     # Evaluates e_kq/S_iwkq shifting the arrays by q with np.roll
     def invchi0_q_roll(s):
         q = start + np.dot(J, np.atleast_1d(s))
 
-        e_kq = lat.get_e_kq(e_k, q, lat.nk_fine)
+        e_kq = get_e_kq(e_k, q, lat.nk_fine)
         if k_dep:
-            S_iwkq = lat.get_f_iwkq(S_iwk, q, lat.nk_fine)
+            S_iwkq = get_f_iwkq(S_iwk, q, lat.nk_fine)
         else:
             S_iwkq = S_iwk
 
@@ -376,9 +401,9 @@ def search_min(lat, mu, beta, q_min, q_path=None, S_val=None, refine_ratio=1, ib
     def invchi0_q_exact(s):
         q = start + np.dot(J, np.atleast_1d(s))
 
-        e_kq, de_kq_dq = lat.get_e_kq(e_k, q, lat.nk_fine, method='exact')
+        e_kq, de_kq_dq = get_e_kq(e_k, q, lat.nk_fine, method='exact', R_vecs=lat.R_vecs, t_vals=lat.t_vals)
         if k_dep:
-            S_iwkq = lat.get_f_iwkq(S_iwk, q, lat.nk_fine, method='exact', f_iwR=S_iwR)
+            S_iwkq = get_f_iwkq(S_iwk, q, lat.nk_fine, method='exact', f_iwR=S_iwR)
         else:
             S_iwkq = S_iwk
 
@@ -493,14 +518,15 @@ def fit_invxi(lat, mu, beta, q_min, U=None, q_path=None, invchi_grid=None, S_val
             e_k = lat.unfold_f_k(e_k, fine=fine)
             if k_dep:
                 S_iwk = lat.unfold_f_iwk(S_iwk, fine=fine)
+                S_iwR = get_f_iwR(S_iwk, nk, fine=True)
         
         # 1/chi0 for each q using Lindhard
         chi_grid = []
         for q in q_grid:
-            e_kq, _ = lat.get_e_kq(e_k, q, nk, method='exact')
+            e_kq, _ = get_e_kq(e_k, q, nk, method='exact', R_vecs=lat.R_vecs, t_vals=lat.t_vals)
 
             if k_dep:
-                S_iwkq = lat.get_f_iwkq(S_iwk, q, nk, method='exact')
+                S_iwkq = get_f_iwkq(S_iwk, q, nk, method='exact', f_iwR=S_iwR)
             else:
                 S_iwkq = S_iwk
 
@@ -557,21 +583,34 @@ def density_k(e_k, S_k, mu, beta, ibz_w_k):
     return 2. * np.dot(nF_real, ibz_w_k)/np.sum(ibz_w_k)
 
 @njit
-def density_iwk(e_k, Gamma_k, mu, beta, ibz_w_k):
+def density_iwk(e_k, S_iwk, mu, beta, ibz_w_k):
+
     Nk = e_k.shape[0]
-    niw = Gamma_k.shape[0]
+    niw = S_iwk.shape[0]
+    len_Sk = S_iwk.shape[1]
+
     n_tot = 0.0
     for k in range(Nk):
         xi = e_k[k] - mu
-        Gamma = Gamma_k[0, 0]
+        Sigma_inf = S_iwk[-1, min(len_Sk - 1, k)].real
+        c2 = xi + Sigma_inf
+
         s = 0.0 + 0.0j
         for n in range(niw):
+
             wn = (2*n + 1) * np.pi / beta
-            z = 1j*wn - xi + 1j*Gamma
-            s += 1.0 / z - 1.0 / (1j*wn) - xi / wn**2  # subtract tails
-        nk = 0.5 + xi/2 + 2*(s / beta).real             # add back analytic tails
+            iwn = 1j * wn
+            Sigma = S_iwk[n, min(len_Sk - 1, k)]
+            G = 1.0 / (iwn - xi - Sigma)
+            G_tail = 1.0/iwn + c2/(iwn*iwn)
+            s += (G - G_tail)
+
+        s *= (2.0 / beta)
+        n_analytic = 0.5 - (beta * c2) / 4.0
+        nk = n_analytic + s.real
         n_tot += ibz_w_k[k] * nk
-    return 2*n_tot/sum(ibz_w_k)
+
+    return 2.0 * n_tot / np.sum(ibz_w_k)
 
 def get_mu(e_k, n_goal, beta, niw=1, S_iwk=None, ibz_w_k=None):
     
@@ -605,7 +644,7 @@ def initialize_bz(lat, nk, refine=True, refine_ratio=1, ibz=True):
         lat.get_e_k(fine=True)
 
 def run_rpa(par, lat=None, t=1., tp=0., dim=3, nk=100, niw=1, S_val=None, q_path=None, method='matsubara', refine=True,
-            refine_ratio=1, get_xi=False, xi_range=[0,0,1e-2], xi_pts=15, fit_grid_pts=True, always_fit_qmin=False,  ibz=True, save_invchigrid=False, verbose=True, save_inputs=True):
+            refine_ratio=1, get_xi=False, xi_range=[0,0,1e-2], xi_pts=15, fit_grid_pts=True, always_fit_qmin=False,  ibz=True, save_invchigrid=False, niw_fit=False, verbose=True, save_inputs=True):
     
     if verbose:
         print('='*50)
@@ -631,10 +670,10 @@ def run_rpa(par, lat=None, t=1., tp=0., dim=3, nk=100, niw=1, S_val=None, q_path
 
     finer_e_k = lat.e_k_fine if lat.e_k_fine is not None else lat.e_k
     finer_ibz_w_k = lat.ibz_w_k_fine if lat.ibz_w_k_fine is not None else lat.ibz_w_k
-    mu = get_mu(e_k=finer_e_k, n_goal=n, beta=1/T, S_iwk=S_val, ibz_w_k=finer_ibz_w_k)
+    mu = get_mu(e_k=finer_e_k, n_goal=n, beta=1/T, niw=niw, S_iwk=S_val, ibz_w_k=finer_ibz_w_k)
 
     if verbose: print(f'U={U:.3f}, T={T:.3f}, n={n:.3f}: 1/chi0 minimum search over grid with nk={lat.nk}...', end='')
-    Q, invchi0_Q, invchi0_grid = get_invchi0_min(lat, mu, 1/T, q_path, method, niw, S_val, ibz)
+    Q, invchi0_Q, invchi0_grid = get_invchi0_min(lat, mu, 1/T, q_path, method, niw, S_val, ibz, niw_fit)
     
     if refine and niw==1:
         if verbose: print(f'U={U:.3f}, T={T:.3f}, n={n:.3f}: 1/chi0 minimum refinement with nk\'={lat.nk_fine}...', end='')
@@ -675,7 +714,7 @@ def run_rpa(par, lat=None, t=1., tp=0., dim=3, nk=100, niw=1, S_val=None, q_path
     return run_data
           
 def sweep_rpa(par_list, lat=None, t=1., tp=0., dim=3, nk=100, niw=1, S_list=None, q_path=None, method='matsubara', 
-                 refine=True, refine_ratio=1., get_xi=False, xi_range=[0,0,1e-2], xi_pts=15, fit_grid_pts=True, always_fit_qmin=False, fit=False, fit_type=HMM, ibz=True, save_file=None, verbose=True, workers=6):
+                 refine=True, refine_ratio=1., get_xi=False, xi_range=[0,0,1e-2], xi_pts=15, fit_grid_pts=True, always_fit_qmin=False, fit=False, fit_type=HMM, ibz=True, niw_fit=False, save_file=None, verbose=True, workers=6):
 
     if verbose:
         print('='*50)
@@ -710,7 +749,7 @@ def sweep_rpa(par_list, lat=None, t=1., tp=0., dim=3, nk=100, niw=1, S_list=None
         refine_ratio = lat.nk_fine/lat.nk if refine else 1
         ibz = lat.ibz
 
-    inputs = [{'lat': lat, 't': t, 'tp': tp, 'dim': dim, 'nk': lat.nk, 'niw': niw, 'S_val': S_list[i], 'q_path': q_path,'method': method, 'refine': refine, 'refine_ratio': refine_ratio, 'get_xi': get_xi, 'xi_range': xi_range, 'xi_pts': xi_pts, 'fit_grid_pts': fit_grid_pts, 'always_fit_qmin': always_fit_qmin, 'ibz': ibz, 'verbose': False, 'save_inputs': False, 'par': par_list[i]} for i in range(sweep_length)]
+    inputs = [{'lat': lat, 't': t, 'tp': tp, 'dim': dim, 'nk': lat.nk, 'niw': niw, 'S_val': S_list[i], 'q_path': q_path,'method': method, 'refine': refine, 'refine_ratio': refine_ratio, 'get_xi': get_xi, 'xi_range': xi_range, 'xi_pts': xi_pts, 'fit_grid_pts': fit_grid_pts, 'always_fit_qmin': always_fit_qmin, 'ibz': ibz, 'niw_fit': niw_fit, 'verbose': False, 'save_inputs': False, 'par': par_list[i]} for i in range(sweep_length)]
     
     results_list = run_parallel(run_rpa, inputs, workers=workers)
     
