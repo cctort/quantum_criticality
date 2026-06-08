@@ -10,7 +10,7 @@ import matplotlib.gridspec as gridspec
 mpl.rcParams['figure.dpi']=100
 
 import seaborn as sns
-color_list = sns.color_palette() + sns.color_palette("Set2") + sns.color_palette("Set3")
+color_list = sns.color_palette('colorblind') + sns.color_palette("Set2") + sns.color_palette("Set3")
 
 
 def prun_dmft(dmft, U, title='', label='', figure=None):
@@ -322,7 +322,7 @@ def pcut_dmft(results, var_label, title='', label='', figure=None):
 def pcut_chi(results, var_label, plot_Q=(1,1,1), fit=False, x_exp=(1,1),
              title='', label='', figure=None, alpha=1., color=None, styles=('o-','o-')):
 
-    has_xi = results['get_xi'][0]
+    has_xi = results['get_xi']
     if not isinstance(x_exp, tuple):
         x_exp = (x_exp,)
 
@@ -331,11 +331,11 @@ def pcut_chi(results, var_label, plot_Q=(1,1,1), fit=False, x_exp=(1,1),
         n_Q = sum(plot_Q)
         fig = plt.figure(figsize=(12, 6))
 
-        outer_gs = gridspec.GridSpec(1, 2, figure=fig)
+        outer_gs = gridspec.GridSpec(1, 2, figure=fig, width_ratios=[2, 1])
 
         # --- Left panel: chi (and optionally xi) as nested subplots ---
         n_left = 2 if has_xi else 1
-        left_gs = gridspec.GridSpecFromSubplotSpec(n_left, 1, subplot_spec=outer_gs[0], hspace=0.25)
+        left_gs = gridspec.GridSpecFromSubplotSpec(1, n_left, subplot_spec=outer_gs[0], wspace=0.3)
 
         ax_chi = fig.add_subplot(left_gs[0])
 
@@ -348,7 +348,7 @@ def pcut_chi(results, var_label, plot_Q=(1,1,1), fit=False, x_exp=(1,1),
 
         ax_chi.set_xlabel(x_label)
         ax_chi.set_ylabel(r'$\chi^{-1}(\mathbf{Q})$')
-        ax_chi.set_title('Correlations')
+        ax_chi.set_title('Susceptibility')
         ax_chi.grid()
 
         ax_xi = None
@@ -362,12 +362,13 @@ def pcut_chi(results, var_label, plot_Q=(1,1,1), fit=False, x_exp=(1,1),
                 x_label = rf'${var_label}^{x_exp[1]:.2g}$'
 
             ax_xi = fig.add_subplot(left_gs[1])
+            ax_xi.set_title('Correlation length')
             ax_xi.set_xlabel(x_label)
             ax_xi.set_ylabel(r'$\xi^{-1}$')
             ax_xi.grid()
 
         # --- Right panel: Q components as nested subplots ---
-        right_gs = gridspec.GridSpecFromSubplotSpec(n_Q, 1, subplot_spec=outer_gs[1], hspace=0.2)
+        right_gs = gridspec.GridSpecFromSubplotSpec(n_Q, 1, subplot_spec=outer_gs[1], hspace=0.15)
 
         Q_label = [r'$Q_x/\pi-1$', r'$Q_y/\pi-1$', r'$Q_z/\pi-1$']
         ax_Q = []
@@ -380,6 +381,9 @@ def pcut_chi(results, var_label, plot_Q=(1,1,1), fit=False, x_exp=(1,1),
                 ax_Q.append(ax)
                 i += 1
         ax_Q[-1].set_xlabel(var_label)
+        if len(ax_Q) > 1:
+            for ax in ax_Q[:-1]:
+                ax.tick_params(axis='x', labelbottom=False)
 
         if ax_Q:
             ax_Q[0].set_title(r'$\mathbf{Q}$ vector')
@@ -403,9 +407,12 @@ def pcut_chi(results, var_label, plot_Q=(1,1,1), fit=False, x_exp=(1,1),
     fit_par_chi = None
     if fit:
         pos_idx = np.where(invchi > 0)
-        fit_par_chi = np.polyfit(var_arr[pos_idx][:15]**x_exp[0], invchi[pos_idx][:15], 1)
-        x0 = var_arr[pos_idx][0]**x_exp[0]
-        ax_chi.axline((x0, x0*fit_par_chi[0] + fit_par_chi[1]), slope=fit_par_chi[0], linestyle='--', color=color, alpha=alpha)
+        if len(pos_idx[0]) > 2:
+            fit_par_chi = np.polyfit(var_arr[pos_idx][:15]**x_exp[0], invchi[pos_idx][:15], 1)
+            x0 = var_arr[pos_idx][0]**x_exp[0]
+            ax_chi.axline((x0, x0*fit_par_chi[0] + fit_par_chi[1]), slope=fit_par_chi[0], linestyle='--', color=color, alpha=alpha)
+        else:
+            fit_par_chi = [np.nan]*2
 
     # Plot chi
     ax_chi.plot(var_arr**x_exp[0], invchi, styles[0], markersize=4, color=color, label=label, alpha=alpha)
@@ -417,9 +424,12 @@ def pcut_chi(results, var_label, plot_Q=(1,1,1), fit=False, x_exp=(1,1),
 
         if fit:
             pos_idx = np.where(invxi > 0)
-            fit_par_xi = np.polyfit(var_arr[pos_idx][:15]**x_exp[1], invxi[pos_idx][:15], 1)
-            x0 = var_arr[pos_idx][0]**x_exp[1]
-            ax_xi.axline((x0, x0*fit_par_xi[0] + fit_par_xi[1]), slope=fit_par_xi[0], linestyle='--', color=color, alpha=alpha)
+            if len(pos_idx[0]) > 2:
+                fit_par_xi = np.polyfit(var_arr[pos_idx][:15]**x_exp[1], invxi[pos_idx][:15], 1)
+                x0 = var_arr[pos_idx][0]**x_exp[1]
+                ax_xi.axline((x0, x0*fit_par_xi[0] + fit_par_xi[1]), slope=fit_par_xi[0], linestyle='--', color=color, alpha=alpha)
+        else:
+            fit_par_xi = [np.nan]*2
             
         ax_xi.plot(var_arr**x_exp[1], invxi, styles[0], markersize=4, color=color, alpha=alpha)
 

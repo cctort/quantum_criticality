@@ -6,7 +6,7 @@ from scripts.lattice import *
 import time
 from numba import njit
 import sys
-from scipy.special import psi
+from scipy.special import zeta
 
 def get_A_iw0k(G_iwk, n_pade=60):
 
@@ -139,24 +139,28 @@ def lindhard_ksp(mu, beta, e_k, e_kq, S_k, S_kq, de_kq_dq=None):
 def matsubara_ksp(mu, beta, e_k, e_kq, S_iwk, S_iwkq):
     
     Nk = len(e_k)
+    niw = len(S_iwk)
+
     chi0 = 0.0j
-    for n in range(len(S_iwk)):
+    for n in range(niw):
         iw = 1j * (2*n + 1) * np.pi / beta
         for k in range(Nk):
             G_iwk  = 1.0 / (iw + mu - e_k[k] - S_iwk[n,k])
             G_iwkq = 1.0 / (iw + mu - e_kq[k] - S_iwkq[n,k])
             chi0 += G_iwk * G_iwkq
+    
+    tail = beta/(2*np.pi**2) * zeta(2, niw + 0.5)
 
-    return (-2.0 / beta * chi0).real / Nk
+    return (-2.0 / beta * chi0).real / Nk + tail
 
 def matsubara_rsp(lat, beta, G_iwk, nk, ibz):
 
     dim = lat.dim
     niw = G_iwk.shape[0]
-    Nk = nk**dim
 
     G_r = np.empty((nk,)*dim, dtype=np.complex128)
     chi0_r = np.zeros((nk,)*dim, dtype=np.float64)
+    neg = np.r_[0, np.arange(nk-1, 0, -1)]
 
     for n in range(niw):
         if ibz:
@@ -164,10 +168,13 @@ def matsubara_rsp(lat, beta, G_iwk, nk, ibz):
         else:
             G_k = G_iwk[n].reshape((nk,)*dim)
         np.fft.ifftn(G_k, out=G_r)
-        chi0_r += G_r.real**2 + G_r.imag**2
+        chi0_r += (G_r * G_r[neg]).real
 
     chi0_q  = np.fft.fftn(chi0_r)
-    chi0_q *= -2.0 / (beta * Nk)
+    chi0_q *= -2.0 / beta
+
+    tail = beta/(2*np.pi**2) * zeta(2, niw + 0.5)
+    chi0_q += tail
 
     invchi0_q = 1.0 / chi0_q.real
     return invchi0_q.reshape(-1)
@@ -188,27 +195,6 @@ def get_G_iwk(mu, beta, e_k, S_iwk, niw):
             G_iwk[n,k] = 1. / (iw_n + mu - e_k[k] - s_iwk)
     
     return G_iwk        
-
-def niw_extrapolate(invchi0_func, niw, deg=2):
-
-    invchi0_list, niw_list = [], []
-    for s in [1, 2, 3, 4]:
-        n_sub = niw // s
-        if n_sub < 4:
-            break
-
-        mesh_sub = np.asarray(invchi0_func(n_sub))
-
-        invchi0_list.append(mesh_sub)
-        niw_list.append(n_sub)
-
-    x = 1. / np.array(niw_list)
-    y = np.stack(invchi0_list, axis=0)
-
-    coeff = np.polyfit(x, y, deg=deg)
-    invchi0_mesh = coeff[-1].squeeze()
-
-    return invchi0_mesh
 
 # Does not yet handle (niw, Nk_fine) or (Nk_fine,) as shapes, relevant only for k_dep
 def get_iwk_arr(S_val, Nk, niw=1):
@@ -234,6 +220,8 @@ def get_iwk_arr(S_val, Nk, niw=1):
             if S_val.shape == (niw, Nk):
                 k_dep = True
         else:
+            print(np.shape(S_val))
+            print(niw, Nk)
             print('S_val must be either None, scalar or array/list with shape (niw,), (Nk,) or (niw, Nk)')
             sys.exit()
 
@@ -268,36 +256,36 @@ def get_grid_from_path(q_path, k_grid, tol=None):
         ))
         tol = 0.51 * spacing
 
-    mask = (
+    path_mask = (
         (dist < tol) &
         (t >= -tol) &
         (t <= length + tol)
     )
 
-    q_grid = q_grid_full[mask]
-    t_sel = t[mask]
+    q_grid = q_grid_full[path_mask]
+    t_sel = t[path_mask]
 
     # sort along the path
     order = np.argsort(t_sel)
     q_grid = q_grid[order]
 
     # explicitly include endpoints
-    if np.linalg.norm(q_grid[0] - start) > tol:
-        q_grid = np.vstack([start, q_grid])
+    #if np.linalg.norm(q_grid[0] - start) > tol:
+    #    q_grid = np.vstack([start, q_grid])
 
-    if np.linalg.norm(q_grid[-1] - stop) > tol:
-        q_grid = np.vstack([q_grid, stop])
+    #if np.linalg.norm(q_grid[-1] - stop) > tol:
+    #    q_grid = np.vstack([q_grid, stop])
 
-    return q_grid
+    return q_grid, path_mask
 
-def get_invchi0_min(lat, mu, beta, nk, q_path=None, method='matsubara', niw=1, S_val=None, niw_extr=False, ibz=True):
+def get_invchi0_min(lat, mu, beta, q_path=None, method='matsubara', niw=1, S_val=None, ibz=True):
     
     e_k = lat.e_k
     Nk = len(e_k)
 
     # q_grid either from q_path or from the BZ/IBZ
     if q_path is not None:
-        q_grid = get_grid_from_path(q_path, lat.k_vecs)
+        q_grid, _ = get_grid_from_path(q_path, lat.k_vecs)
     else:
         q_grid = lat.k_vecs / np.pi
 
@@ -315,10 +303,10 @@ def get_invchi0_min(lat, mu, beta, nk, q_path=None, method='matsubara', niw=1, S
         # 1/chi0 for each q using Lindhard
         invchi0_grid = []
         for q in q_grid:
-            e_kq = lat.get_e_kq(e_k, q, nk)
+            e_kq = lat.get_e_kq(e_k, q, lat.nk)
 
             if k_dep:
-                S_iwkq = lat.get_f_iwkq(S_iwk, q, nk)
+                S_iwkq = lat.get_f_iwkq(S_iwk, q, lat.nk)
             else:
                 S_iwkq = S_iwk
 
@@ -327,24 +315,10 @@ def get_invchi0_min(lat, mu, beta, nk, q_path=None, method='matsubara', niw=1, S
 
     elif method == 'matsubara':
 
-        # Unfold e_k before G_iwk evaluation (faster if we do not have to unfold f_iwk also)
-        if ibz and not k_dep:
-            e_k = lat.unfold_f_k(e_k)
-
         G_iwk = np.array(get_G_iwk(mu, beta, e_k, S_iwk, niw))
-
-        # if not already unfolded, unfold directly G_iwk
-        if ibz and k_dep:
-            G_iwk = lat.unfold_f_iwk(G_iwk)
         
         # Evaluate 1/chi0 over whole BZ using FFT back and forth
-        if niw_extr:
-            invchi0_func = lambda niw: matsubara_rsp(beta, G_iwk[:niw+1], nk)
-            invchi0_grid = niw_extrapolate(invchi0_func, niw)
-        else:
-            invchi0_grid = matsubara_rsp(beta, G_iwk, nk)
-        
-        del G_iwk
+        invchi0_grid = matsubara_rsp(lat, beta, G_iwk, lat.nk, ibz)
 
         # Fold into IBZ to save memory
         if ibz:
@@ -357,7 +331,7 @@ def get_invchi0_min(lat, mu, beta, nk, q_path=None, method='matsubara', niw=1, S
 
     return np.array(q_min), invchi0_min, np.array(invchi0_grid)
 
-def refine_min(lat, mu, beta, nk, q_min, q_path=None, S_val=None, refine_ratio=1, ibz=True):
+def search_min(lat, mu, beta, q_min, q_path=None, S_val=None, refine_ratio=1, ibz=True):
     
     dim = lat.dim
     e_k = lat.e_k_fine
@@ -365,7 +339,7 @@ def refine_min(lat, mu, beta, nk, q_min, q_path=None, S_val=None, refine_ratio=1
 
     # q_grid either from q_path or from the BZ/IBZ
     if q_path is not None:
-        q_grid = get_grid_from_path(q_path, lat.k_vecs)
+        q_grid, _ = get_grid_from_path(q_path, lat.k_vecs)
     else:
         q_grid = lat.k_vecs / np.pi
 
@@ -373,7 +347,6 @@ def refine_min(lat, mu, beta, nk, q_min, q_path=None, S_val=None, refine_ratio=1
     S_iwk, k_dep = get_iwk_arr(S_val, Nk, 1)
 
     # Get new nk, e_k and S_iwk
-    nk_fine = int(refine_ratio * nk)
     e_k = lat.e_k_fine
     if ibz:
         e_k = lat.unfold_f_k(e_k, fine=True)
@@ -383,15 +356,15 @@ def refine_min(lat, mu, beta, nk, q_min, q_path=None, S_val=None, refine_ratio=1
             S_iwk = lat.unfold_f_iwk(S_iwk, fine=True)
 
         # If k_dep, precalculate S_iwR for the FFT
-        S_iwR = lat.get_f_iwR(S_iwk, nk_fine, fine=True)
+        S_iwR = lat.get_f_iwR(S_iwk, lat.nk_fine, fine=True)
 
     # Evaluates e_kq/S_iwkq shifting the arrays by q with np.roll
     def invchi0_q_roll(s):
         q = start + np.dot(J, np.atleast_1d(s))
 
-        e_kq = lat.get_e_kq(e_k, q, nk_fine)
+        e_kq = lat.get_e_kq(e_k, q, lat.nk_fine)
         if k_dep:
-            S_iwkq = lat.get_f_iwkq(S_iwk, q, nk_fine)
+            S_iwkq = lat.get_f_iwkq(S_iwk, q, lat.nk_fine)
         else:
             S_iwkq = S_iwk
 
@@ -403,9 +376,9 @@ def refine_min(lat, mu, beta, nk, q_min, q_path=None, S_val=None, refine_ratio=1
     def invchi0_q_exact(s):
         q = start + np.dot(J, np.atleast_1d(s))
 
-        e_kq, de_kq_dq = lat.get_e_kq(e_k, q, nk_fine, method='exact')
+        e_kq, de_kq_dq = lat.get_e_kq(e_k, q, lat.nk_fine, method='exact')
         if k_dep:
-            S_iwkq = lat.get_f_iwkq(S_iwk, q, nk_fine, method='exact', f_iwR=S_iwR)
+            S_iwkq = lat.get_f_iwkq(S_iwk, q, lat.nk_fine, method='exact', f_iwR=S_iwR)
         else:
             S_iwkq = S_iwk
 
@@ -435,7 +408,7 @@ def refine_min(lat, mu, beta, nk, q_min, q_path=None, S_val=None, refine_ratio=1
         J = lat.b_vecs / (2*np.pi)
         J_inv = np.linalg.inv(J)
         s0 = J_inv @ (q_min - start)
-        step = 1.0 / nk
+        step = 1.0 / lat.nk
         bounds = []
         for d in range(dim):
             lo = max(0.0, s0[d] - safe*step)
@@ -445,9 +418,8 @@ def refine_min(lat, mu, beta, nk, q_min, q_path=None, S_val=None, refine_ratio=1
     if refine_ratio > 1.:
 
         if q_path is not None:
-            q_grid_fine = get_grid_from_path(q_path, lat.k_vecs_fine)
+            q_grid_fine, _ = get_grid_from_path(q_path, lat.k_vecs_fine)
             start = q_grid_fine[0]
-            J_inv = np.linalg.pinv(J)
             s_grid_fine = np.array([J_inv @ (q - start) for q in q_grid_fine]).squeeze()
             mask = (s_grid_fine >= lo) & (s_grid_fine <= hi)
             s_grid = s_grid_fine[mask]
@@ -468,7 +440,7 @@ def refine_min(lat, mu, beta, nk, q_min, q_path=None, S_val=None, refine_ratio=1
             hi    = min(1.0, s0[0] + safe*step)
             bounds = [(lo, hi)]
         else:
-            step  = 1.0 / nk_fine
+            step  = 1.0 / lat.nk_fine
             bounds = []
             for d in range(dim):
                 lo = max(0.0, s0[d] - safe*step)
@@ -490,58 +462,85 @@ def refine_min(lat, mu, beta, nk, q_min, q_path=None, S_val=None, refine_ratio=1
 
     return np.array(q_min), invchi0_min
 
-def fit_invxi(lat, mu, beta, U, nk, q_min, S_val=None, fit_range=[0,0,1e-2], fit_pts=15, refine_ratio=1, ibz=True):
+def fit_invxi(lat, mu, beta, q_min, U=None, q_path=None, invchi_grid=None, S_val=None, fit_range=[0,0,1e-2], fit_pts=15, ibz=True, fit_grid_pts=True, always_fit_qmin=False):
 
-    if lat.e_k_fine is None:
+    if lat.nk_fine is None:
+        nk = lat.nk
         e_k = lat.e_k
         fine = False
     else:
+        nk = lat.nk_fine
         e_k = lat.e_k_fine
         fine = True
-    
-    nk_fine = int(refine_ratio * nk)
 
     Nk = len(e_k)
     S_iwk, k_dep = get_iwk_arr(S_val, Nk, 1)
+
+    # q_grid either from q_path or from the BZ/IBZ
+    if q_path is not None:
+        q_grid, _ = get_grid_from_path(q_path, lat.k_vecs)
+    else:
+        q_grid = lat.k_vecs / np.pi
     
-    if ibz:
-        e_k = lat.unfold_f_k(e_k, fine=fine)
-        if k_dep:
-            S_iwk = lat.unfold_f_iwk(S_iwk, fine=fine)
-    
-    fit_range = np.array(fit_range)
     start = q_min - fit_range
     stop = q_min + fit_range
-    q_grid = np.linspace(start, stop, fit_pts)
     
-    # 1/chi0 for each q using Lindhard
-    chi_grid = []
-    for q in q_grid:
-        e_kq, _ = lat.get_e_kq(e_k, q, nk_fine, method='exact')
+    if not fit_grid_pts:
+        
+        q_grid = np.linspace(start, stop, fit_pts)
 
-        if k_dep:
-            S_iwkq = lat.get_f_iwkq(S_iwk, q, nk_fine, method='exact')
-        else:
-            S_iwkq = S_iwk
+        if ibz:
+            e_k = lat.unfold_f_k(e_k, fine=fine)
+            if k_dep:
+                S_iwk = lat.unfold_f_iwk(S_iwk, fine=fine)
+        
+        # 1/chi0 for each q using Lindhard
+        chi_grid = []
+        for q in q_grid:
+            e_kq, _ = lat.get_e_kq(e_k, q, nk, method='exact')
 
-        chi0, _ = lindhard_ksp(mu, beta, e_k, e_kq, S_iwk[0], S_iwkq[0])
-        chi_grid.append(chi0/(1 - U*chi0))
+            if k_dep:
+                S_iwkq = lat.get_f_iwkq(S_iwk, q, nk, method='exact')
+            else:
+                S_iwkq = S_iwk
 
-    p0 = [0.01, 0., 1/chi_grid[fit_pts//2]]
+            chi0, _ = lindhard_ksp(mu, beta, e_k, e_kq, S_iwk[0], S_iwkq[0])
+            chi_grid.append(chi0/(1 - U*chi0))
+    
+    else:
+        q_path = (start, stop)
+        q_grid, path_mask = get_grid_from_path(q_path, np.pi*q_grid)
+        chi_grid = 1/np.array(invchi_grid)[path_mask]
+    
+    p0 = [0.01, 0., abs(1/chi_grid[len(chi_grid)//2])]
     bounds = ([0., -np.inf, 0.], [1., np.inf, np.inf])
 
     e_hat = (stop - start)
     e_hat /= np.linalg.norm(e_hat)
-    s_grid = np.pi * (q_grid - q_min[None,:]) @ e_hat
+    s_grid = q_grid @ e_hat
+    s0 = q_min @ e_hat
+
+    if not fine or always_fit_qmin:
+        p0.append(s0)
+        bounds[0].append(s0 - 4/nk)
+        bounds[1].append(s0 + 4/nk)
+        OZ_fit = OZ
+    else:
+        OZ_fit = lambda a, b, invxi: OZ(a, b, invxi, s0)
 
     try:
-        par, cov = curve_fit(OZ, s_grid, chi_grid, p0=p0, bounds=bounds, maxfev=10000)
+        par, _ = curve_fit(OZ_fit, s_grid, chi_grid, p0=p0, bounds=bounds, maxfev=10000)
+        if not fine or always_fit_qmin:
+            new_q_min = q_min - (q_min @ e_hat)*e_hat + par[3]*e_hat
+        else:
+            new_q_min = np.array([np.nan]*len(q_min))
     
     except RuntimeError:
-        par = [np.nan]*3
-        cov = [[np.nan]*3]*3
+        n_pars = len(p0)
+        par = np.array([np.nan]*n_pars)
+        new_q_min = np.array([np.nan]*len(q_min))
 
-    return (par, cov), (q_grid, 1/np.array(chi_grid))
+    return par, new_q_min
 
 def density_k(e_k, S_k, mu, beta, ibz_w_k):
     x  = e_k + S_k.real - mu
@@ -554,40 +553,35 @@ def density_k(e_k, S_k, mu, beta, ibz_w_k):
     emx = np.exp(-xr)
 
     nF_real = (cos_xi + emx) / (ex + 2*cos_xi + emx)
-    #nF_real = 0.5 - 0.5 * np.tanh(0.5*(xr - 1j*xi))
-    #print(nF_real.real)
 
     return 2. * np.dot(nF_real, ibz_w_k)/np.sum(ibz_w_k)
 
 @njit
 def density_iwk(e_k, Gamma_k, mu, beta, ibz_w_k):
-
     Nk = e_k.shape[0]
     niw = Gamma_k.shape[0]
     n_tot = 0.0
     for k in range(Nk):
-
         xi = e_k[k] - mu
         Gamma = Gamma_k[0, 0]
         s = 0.0 + 0.0j
         for n in range(niw):
             wn = (2*n + 1) * np.pi / beta
             z = 1j*wn - xi + 1j*Gamma
-            s += 1.0 / z
-        nk = 0.5 + 2*(s / beta).real
+            s += 1.0 / z - 1.0 / (1j*wn) - xi / wn**2  # subtract tails
+        nk = 0.5 + xi/2 + 2*(s / beta).real             # add back analytic tails
         n_tot += ibz_w_k[k] * nk
-
     return 2*n_tot/sum(ibz_w_k)
 
 def get_mu(e_k, n_goal, beta, niw=1, S_iwk=None, ibz_w_k=None):
     
     Nk_ibz = len(e_k)
-    S_iwk, k_dep = get_iwk_arr(S_iwk, Nk=Nk_ibz, niw=niw)
+    S_iwk, _ = get_iwk_arr(S_iwk, Nk=Nk_ibz, niw=niw)
 
     if ibz_w_k is None:
         ibz_w_k = np.ones(Nk_ibz)
 
-    if k_dep:
+    if niw > 1:
         def density(mu): return density_iwk(e_k, S_iwk, mu, beta, ibz_w_k)
     else:
         def density(mu): return density_k(e_k, S_iwk[0], mu, beta, ibz_w_k)
@@ -611,7 +605,7 @@ def initialize_bz(lat, nk, refine=True, refine_ratio=1, ibz=True):
         lat.get_e_k(fine=True)
 
 def run_rpa(par, lat=None, t=1., tp=0., dim=3, nk=100, niw=1, S_val=None, q_path=None, method='matsubara', refine=True,
-            refine_ratio=1, get_xi=False, xi_range=[0,0,1e-2], xi_pts=15, niw_extr=False, ibz=True, verbose=True, save_inputs=True):
+            refine_ratio=1, get_xi=False, xi_range=[0,0,1e-2], xi_pts=15, fit_grid_pts=True, always_fit_qmin=False,  ibz=True, save_invchigrid=False, verbose=True, save_inputs=True):
     
     if verbose:
         print('='*50)
@@ -625,16 +619,11 @@ def run_rpa(par, lat=None, t=1., tp=0., dim=3, nk=100, niw=1, S_val=None, q_path
 
     if lat is None:
         lat = LATTICE(t=t, tp=tp, dim=dim)
-
-    if lat.nk is not None:
-        nk = lat.nk
-    
-    if lat.nk_fine is not None:
-        refine = True
-        refine_ratio = lat.nk_fine / lat.nk
+        initialize_bz(lat, nk, refine, refine_ratio, ibz)
+    else:
+        refine = lat.nk_fine is not None
+        refine_ratio = lat.nk_fine/lat.nk if refine else 1
         ibz = lat.ibz
-
-    initialize_bz(lat, nk, refine, refine_ratio, ibz)
 
     U, T, n = par['U'], par['T'], par['n']
 
@@ -644,23 +633,29 @@ def run_rpa(par, lat=None, t=1., tp=0., dim=3, nk=100, niw=1, S_val=None, q_path
     finer_ibz_w_k = lat.ibz_w_k_fine if lat.ibz_w_k_fine is not None else lat.ibz_w_k
     mu = get_mu(e_k=finer_e_k, n_goal=n, beta=1/T, S_iwk=S_val, ibz_w_k=finer_ibz_w_k)
 
-    if verbose: print(f'U={U:.3f}, T={T:.3f}, n={n:.3f}: 1/chi0 minimum search over grid with nk={nk}...', end='')
-    Q, invchi0_Q, _ = get_invchi0_min(lat, mu, 1/T, nk, q_path, method, niw, S_val, niw_extr, ibz)
+    if verbose: print(f'U={U:.3f}, T={T:.3f}, n={n:.3f}: 1/chi0 minimum search over grid with nk={lat.nk}...', end='')
+    Q, invchi0_Q, invchi0_grid = get_invchi0_min(lat, mu, 1/T, q_path, method, niw, S_val, ibz)
     
-    if refine:
+    if refine and niw==1:
         if verbose: print(f'U={U:.3f}, T={T:.3f}, n={n:.3f}: 1/chi0 minimum refinement with nk\'={lat.nk_fine}...', end='')
-        Q, invchi0_Q = refine_min(lat, mu, 1/T, nk, Q, q_path, S_val, refine_ratio, ibz)
+        Q, invchi0_Q = search_min(lat, mu, 1/T, Q, q_path, S_val, refine_ratio, ibz)
     
     invchi_Q = invchi0_Q.real - U
+    if save_invchigrid:
+        run_data['invchi_grid'] = invchi0_grid.real - U
     
     if get_xi:
         if invchi_Q > 0.:
             if verbose: print(f'U={U:.3f}, T={T:.3f}, n={n:.3f}: 1/xi estimation with OZ fit over chi(q)...', end='')
-            fit_out, _ = fit_invxi(lat, mu, 1/T, U, lat.nk_fine, Q, S_val, xi_range, xi_pts, ibz)
-            par, _ = fit_out
-            invxi = par[2]
+            run_data['OZ_fit'], run_data['Q_fitted'] = fit_invxi(lat, mu, 1/T, Q, U, q_path, invchi0_grid.real-U, S_val, xi_range, xi_pts, ibz, fit_grid_pts, always_fit_qmin)
+            invxi = run_data['OZ_fit'][2]
+            if not refine and niw > 1:
+                Q = run_data['Q_fitted']
         else:
+            n_pars = 4 if not refine else 3
+            run_data['OZ_fit'] = np.array([np.nan]*n_pars)
             invxi = np.nan
+            run_data['Q_fitted'] = np.array([np.nan]*dim)
 
     if verbose:
         Q_str = "(" + ", ".join(f"{x:.3g}" for x in Q) + ")"
@@ -679,9 +674,8 @@ def run_rpa(par, lat=None, t=1., tp=0., dim=3, nk=100, niw=1, S_val=None, q_path
     
     return run_data
           
-def sweep_rpa(par_list, lat=None, t=1., tp=0., dim=3, nk=100, niw=1, S_iwk_list=None, q_path=None, method='matsubara', 
-                 refine=True, refine_ratio=1., get_xi=False, xi_range=[0,0,1e-2], xi_pts=15, fit=False, 
-                 fit_type=HMM, niw_extr=False, ibz=True, save_file=None, verbose=True, workers=6):
+def sweep_rpa(par_list, lat=None, t=1., tp=0., dim=3, nk=100, niw=1, S_list=None, q_path=None, method='matsubara', 
+                 refine=True, refine_ratio=1., get_xi=False, xi_range=[0,0,1e-2], xi_pts=15, fit_grid_pts=True, always_fit_qmin=False, fit=False, fit_type=HMM, ibz=True, save_file=None, verbose=True, workers=6):
 
     if verbose:
         print('='*50)
@@ -703,19 +697,20 @@ def sweep_rpa(par_list, lat=None, t=1., tp=0., dim=3, nk=100, niw=1, S_iwk_list=
     
     varying_par = [par[varying_key] for par in par_list]
 
-    if isinstance(S_iwk_list, (list, np.ndarray)) and len(S_iwk_list) == sweep_length:
+    if isinstance(S_list, (list, np.ndarray)) and len(S_list) == sweep_length:
         pass
     else:
-        S_iwk_list = [S_iwk_list] * sweep_length
-    
+        S_list = [S_list] * sweep_length
+
     if lat is None:
         lat = LATTICE(t=t, tp=tp, dim=dim)
+        initialize_bz(lat, nk, refine, refine_ratio, ibz)
+    else:
+        refine = lat.nk_fine is not None
+        refine_ratio = lat.nk_fine/lat.nk if refine else 1
+        ibz = lat.ibz
 
-    initialize_bz(lat, nk, refine, refine_ratio, ibz)
-
-    inputs = [{'lat': lat, 't': t, 'tp': tp, 'dim': dim, 'nk': nk, 'niw': niw, 'S_val': S_iwk_list[i], 'q_path': q_path,
-               'method': method, 'refine': refine, 'refine_ratio': refine_ratio, 'get_xi': get_xi, 'xi_range': xi_range, 'xi_pts': xi_pts,
-               'niw_extr': niw_extr, 'ibz': ibz, 'verbose': False, 'par': par_list[i]} for i in range(sweep_length)]
+    inputs = [{'lat': lat, 't': t, 'tp': tp, 'dim': dim, 'nk': lat.nk, 'niw': niw, 'S_val': S_list[i], 'q_path': q_path,'method': method, 'refine': refine, 'refine_ratio': refine_ratio, 'get_xi': get_xi, 'xi_range': xi_range, 'xi_pts': xi_pts, 'fit_grid_pts': fit_grid_pts, 'always_fit_qmin': always_fit_qmin, 'ibz': ibz, 'verbose': False, 'save_inputs': False, 'par': par_list[i]} for i in range(sweep_length)]
     
     results_list = run_parallel(run_rpa, inputs, workers=workers)
     

@@ -109,5 +109,7 @@ def GL(x, a, b, Xc):
 def HMM(x, a, b, Xc):
     return a * np.sign(x) * abs(x)**b - np.sign(Xc) * abs(Xc)**b
 
-def OZ(s, a, b, invxi):
-    return a/(s**2 + invxi**2 + b*s**3)
+def OZ(s, a, b, invxi, s_min):
+
+    x = np.pi * (s - s_min)
+    return a/(x**2 + invxi**2 + b*x**3)

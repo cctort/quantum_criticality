@@ -11,16 +11,15 @@ from scripts.obs import *
 from numba import njit
 
 @njit
-def scba_solver(niw, Nk, v, k_vecs, v2_R_vecs, v2_vals, G_iwR):
+def scba_solver(Nk, v, k_vecs, v2_R_vecs, v2_vals, G_iwR):
 
-    S_iwk = np.zeros((niw, Nk), dtype=np.complex128)
+    S_k = np.zeros(Nk, dtype=np.complex128)
     for k in range(Nk):
-        for n in range(niw):
-            for i in range(len(v2_R_vecs)):
-                phase = np.exp(1j * np.dot(v2_R_vecs[i].astype(np.float64), k_vecs[k]))
-                S_iwk[n, k] += v * v2_vals[i] * G_iwR[n, i] * phase
+        for i in range(len(v2_R_vecs)):
+            phase = np.exp(1j * np.dot(v2_R_vecs[i], k_vecs[k]))
+            S_k[k] += v * v2_vals[i] * G_iwR[i] * phase
     
-    return S_iwk
+    return S_k
 
 
 class SCBA:
@@ -70,12 +69,13 @@ class SCBA:
 
         if verbose:
             print('=' * 50)
-            print(f"SCBA: nk={nk}^{dim}, niw={niw}, T={beta:.2f}, mu={mu:.4f}, v={v:.3f}")
+            print(f"SCBA: nk={nk}^{dim}, niw={niw}, T={1/beta:.2f}, mu={mu:.4f}, v={v:.3f}")
 
         self.S_iwk, _ = get_iwk_arr(init_S, self.Nk_ibz, niw)
 
         self.run_stats = {'diff': [], 'mix': [], 'n': [], 'mu': []}
 
+        S_new = np.zeros((niw, self.Nk_ibz), dtype=np.complex128)
         converged = False
         for step in range(max_iter):
 
@@ -83,15 +83,20 @@ class SCBA:
 
             G_iwk = get_G_iwk(mu, beta, self.lat.e_k, self.S_iwk, self.niw)
 
-            if ibz:
-                G_iwk = self.lat.unfold_f_iwk(G_iwk)
-            G_iwR = self.lat.get_f_iwR(G_iwk, self.nk).reshape(niw,-1)
+            for n in range(niw):
+                if ibz:
+                    G_k = self.lat.unfold_f_k(G_iwk[n])
+                else:
+                    G_k = G_iwk[n]
+                G_R = self.lat.get_f_R(G_k, self.nk).reshape(-1)
 
-            strides = nk**np.arange(dim - 1, -1, -1)
-            sparse_idx = (self.v2_R_vecs % nk) @ strides
-            G_iwR_sparse = G_iwR[:, sparse_idx]
-            
-            S_new = scba_solver(niw, self.Nk_ibz, v2, self.lat.k_vecs, self.v2_R_vecs, self.v2_vals, G_iwR_sparse)
+                strides = nk**np.arange(dim - 1, -1, -1)
+                sparse_idx = (self.v2_R_vecs % nk) @ strides
+                G_R_sparse = G_R[sparse_idx]
+
+                v2_R_vecs = [self.v2_R_vecs[i].astype(np.float64) for i in range(len(self.v2_R_vecs))]
+                
+                S_new[n] = scba_solver(self.Nk_ibz, v2, self.lat.k_vecs, v2_R_vecs, self.v2_vals, G_R_sparse)
 
             diff = float(np.max(np.abs(S_new - self.S_iwk)))
             self.S_iwk = mix * self.S_iwk + (1 - mix) * S_new
@@ -117,6 +122,8 @@ class SCBA:
                 print(f"\nNot converged after {max_iter} iterations (diff = {diff:.3e})")
         
         self.run_stats['converged'] = converged
+
+        return self.S_iwk
 
 
 def sweep_scba(params, lattice, n_iw=512, verbose=False):
@@ -168,25 +175,3 @@ def sweep_scba(params, lattice, n_iw=512, verbose=False):
 
     results['inputs'] = {'t': lattice.t, 'dim': lattice.dim, 'n_iw': n_iw}
     return results
-
-
-def worker_scba(T, W, mu, lattice_args, n_iw=512, verbose=False, **kwargs):
-    """Stateless worker for sweep_parallel. Rebuilds LATTICE internally."""
-    from scripts.lattice import LATTICE
-    lattice = LATTICE(**lattice_args)
-    lattice.get_e_k(lattice_args['nk'])
-
-    scba = SCBA(lattice, beta=1/T, n_iw=n_iw)
-    scba.run(W=W, mu=mu, verbose=verbose, **kwargs)
-
-    if scba.converged:
-        return {
-            'T': T, 'W': W, 'mu': mu,
-            'S_iwk' : scba.S_iwk.copy(),
-            'G_iwk'     : scba.G_iwk.copy(),
-            'G_loc'    : scba.G_loc.copy(),
-            'filling'  : scba.filling(),
-            'diff'     : scba.convergence['diff'][-1],
-            'converged': True,
-        }
-    return {'T': T, 'W': W, 'mu': mu, 'converged': False}

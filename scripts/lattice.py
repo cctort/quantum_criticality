@@ -59,7 +59,7 @@ class LATTICE:
         self.k_vecs, self.k_vecs_fine = None, None
         self.e_k, self.e_k_fine = None, None
 
-        self.ibz_w_k, self.ibz_w_k = None, None
+        self.ibz_w_k, self.ibz_w_k_fine = None, None
         self.ibz_idx, self.ibz_idx_fine = None, None
         self.ibz_pos, self.ibz_pos_fine = None, None
 
@@ -81,9 +81,9 @@ class LATTICE:
             ibz_w_k = np.ones(nk**self.dim)
 
             if not fine:
-                self.k_vecs, self.ibz_w_k = k_vecs, ibz_w_k
+                self.k_vecs, self.ibz_w_k = np.ascontiguousarray(k_vecs), ibz_w_k
             else:
-                self.k_vecs_fine, self.ibz_w_k_fine = k_vecs, ibz_w_k
+                self.k_vecs_fine, self.ibz_w_k_fine = np.ascontiguousarray(k_vecs), ibz_w_k
 
         else:
             mapping, ir_grid = spglib.get_ir_reciprocal_mesh(nk_tuple, self.spg_cell)
@@ -94,10 +94,10 @@ class LATTICE:
             k_vecs = (ir_grid[ibz_idx] / np.array(nk_tuple, dtype=float) * 2*np.pi)[:,:self.dim]
 
             if not fine:
-                self.k_vecs, self.ibz_w_k = k_vecs, ibz_w_k
+                self.k_vecs, self.ibz_w_k = np.ascontiguousarray(k_vecs), ibz_w_k
                 self.ibz_idx, self.ibz_pos = ibz_idx, ibz_pos
             else:
-                self.k_vecs_fine, self.ibz_w_k_fine = k_vecs, ibz_w_k
+                self.k_vecs_fine, self.ibz_w_k_fine = np.ascontiguousarray(k_vecs), ibz_w_k
                 self.ibz_idx_fine, self.ibz_pos_fine = ibz_idx, ibz_pos
     
     def get_e_k(self, fine=False):
@@ -110,12 +110,20 @@ class LATTICE:
         else:
             H_k = H_r.fourier(self.k_vecs_fine/(2*np.pi))
             self.e_k_fine = H_k[:,0,0].real
+    
+    def get_f_R(self, f_k, nk):
+
+        dim = self.dim
+        f_k_grid = f_k.reshape((nk,) * dim)
+        f_R = np.fft.fftn(f_k_grid) / nk**dim
+
+        return f_R
 
     def get_f_iwR(self, f_iwk, nk):
+
         dim = self.dim
         niw = f_iwk.shape[0]
         f_iwk_grid = f_iwk.reshape((niw,) + (nk,) * dim)
-
         f_iwR = np.fft.fftn(f_iwk_grid, axes=range(1, dim + 1)) / nk**dim
 
         return f_iwR
