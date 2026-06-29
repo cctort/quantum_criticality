@@ -7,7 +7,19 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import matplotlib.gridspec as gridspec
-mpl.rcParams['figure.dpi']=100
+#mpl.rcParams['figure.dpi']=100
+
+mpl.rcParams.update({
+    "text.usetex": True,
+    "font.family": "serif",
+    "font.size": 16,
+    "axes.labelsize": 18,
+    "axes.titlesize": 18,
+    "xtick.labelsize": 16,
+    "ytick.labelsize": 16,
+    "legend.fontsize": 14,
+    "figure.titlesize": 20,
+})
 
 import seaborn as sns
 color_list = sns.color_palette('colorblind') + sns.color_palette("Set2") + sns.color_palette("Set3")
@@ -335,7 +347,7 @@ def pcut_chi(results, var_label, plot_Q=(1,1,1), fit=False, x_exp=(1,1),
 
         # --- Left panel: chi (and optionally xi) as nested subplots ---
         n_left = 2 if has_xi else 1
-        left_gs = gridspec.GridSpecFromSubplotSpec(1, n_left, subplot_spec=outer_gs[0], wspace=0.3)
+        left_gs = gridspec.GridSpecFromSubplotSpec(1, n_left, subplot_spec=outer_gs[0], wspace=0.43)
 
         ax_chi = fig.add_subplot(left_gs[0])
 
@@ -344,10 +356,10 @@ def pcut_chi(results, var_label, plot_Q=(1,1,1), fit=False, x_exp=(1,1),
         elif x_exp[0] == 0.5:
             x_label = rf'$\sqrt{{{var_label}}}$'
         else:
-            x_label = rf'${var_label}^{x_exp[0]:.2g}$'
+            x_label = rf'${var_label}^{{{x_exp[0]:.3g}}}$'
 
         ax_chi.set_xlabel(x_label)
-        ax_chi.set_ylabel(r'$\chi^{-1}(\mathbf{Q})$')
+        ax_chi.set_ylabel(r'$\chi^{-1}_m(\mathbf{Q})$')
         ax_chi.set_title('Susceptibility')
         ax_chi.grid()
 
@@ -359,16 +371,16 @@ def pcut_chi(results, var_label, plot_Q=(1,1,1), fit=False, x_exp=(1,1),
             elif x_exp[1] == 0.5:
                 x_label = rf'$\sqrt{{{var_label}}}$'
             else:
-                x_label = rf'${var_label}^{x_exp[1]:.2g}$'
+                x_label = rf'${var_label}^{{{x_exp[1]:.3g}}}$'
 
             ax_xi = fig.add_subplot(left_gs[1])
             ax_xi.set_title('Correlation length')
             ax_xi.set_xlabel(x_label)
-            ax_xi.set_ylabel(r'$\xi^{-1}$')
+            ax_xi.set_ylabel(r'$\xi^{-1}_m$')
             ax_xi.grid()
 
         # --- Right panel: Q components as nested subplots ---
-        right_gs = gridspec.GridSpecFromSubplotSpec(n_Q, 1, subplot_spec=outer_gs[1], hspace=0.15)
+        right_gs = gridspec.GridSpecFromSubplotSpec(n_Q, 1, subplot_spec=outer_gs[1], hspace=0.1)
 
         Q_label = [r'$Q_x/\pi-1$', r'$Q_y/\pi-1$', r'$Q_z/\pi-1$']
         ax_Q = []
@@ -410,7 +422,7 @@ def pcut_chi(results, var_label, plot_Q=(1,1,1), fit=False, x_exp=(1,1),
         if len(pos_idx[0]) > 2:
             fit_par_chi = np.polyfit(var_arr[pos_idx][:15]**x_exp[0], invchi[pos_idx][:15], 1)
             x0 = var_arr[pos_idx][0]**x_exp[0]
-            ax_chi.axline((x0, x0*fit_par_chi[0] + fit_par_chi[1]), slope=fit_par_chi[0], linestyle='--', color=color, alpha=alpha)
+            ax_chi.axline((x0, x0*fit_par_chi[0] + fit_par_chi[1]), slope=fit_par_chi[0], linestyle='--', color='black', linewidth=0.9, alpha=alpha)
         else:
             fit_par_chi = [np.nan]*2
 
@@ -425,11 +437,19 @@ def pcut_chi(results, var_label, plot_Q=(1,1,1), fit=False, x_exp=(1,1),
         if fit:
             pos_idx = np.where(invxi > 0)
             if len(pos_idx[0]) > 2:
-                fit_par_xi = np.polyfit(var_arr[pos_idx][:15]**x_exp[1], invxi[pos_idx][:15], 1)
-                x0 = var_arr[pos_idx][0]**x_exp[1]
-                ax_xi.axline((x0, x0*fit_par_xi[0] + fit_par_xi[1]), slope=fit_par_xi[0], linestyle='--', color=color, alpha=alpha)
+                x_step = var_arr[pos_idx][1] - var_arr[pos_idx][0]
+                x_fit = np.linspace(0., var_arr[pos_idx][-1] + x_step, 1000)
+
+                #fit_xi = lambda x, a, Xc: np.sqrt(abs(HMM(x, a, x_exp[0]/x_exp[1], Xc) * x**(2-x_exp[0]/x_exp[1]))) * np.sign(HMM(x, a, x_exp[0]/x_exp[1], Xc) * x**(2-x_exp[0]/x_exp[1]))
+
+                fit_xi = lambda x, a, Xc, b, c: np.sqrt(abs(HMM(x, a, x_exp[0]/x_exp[1], Xc) * abs(HMM(x, b, 1.5/x_exp[1], c)))) * np.sign(HMM(x, a, x_exp[0]/x_exp[1], Xc) * HMM(x, b, 1.5/x_exp[1], c))
+                try:
+                    fit_par_xi, _ = curve_fit(fit_xi, var_arr[pos_idx][:15]**x_exp[1], invxi[pos_idx][:15], p0=[1., 0.9*x_fit[0], 6., 0.05])
+                    ax_xi.plot(x_fit**x_exp[1], fit_xi(x_fit**x_exp[1], *fit_par_xi), linestyle='--', color='black', linewidth=0.9, alpha=alpha)
+                except RuntimeError:
+                    fit_par_xi = [np.nan]*4
         else:
-            fit_par_xi = [np.nan]*2
+            fit_par_xi = [np.nan]*4
             
         ax_xi.plot(var_arr**x_exp[1], invxi, styles[0], markersize=4, color=color, alpha=alpha)
 
