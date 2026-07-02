@@ -250,7 +250,7 @@ def plot_scaling(data, x_exp=(1, 1, 1),
                           color='black', linewidth=0.9)
 
         ax_chi.plot(T ** x_exp[0], data['invchi_min'][i], 'o-',
-                     markersize=4, color=color_list[i], label=f'$n = {n}$')
+                     markersize=4, color=color_list[i], label=f'$n = {n:.5g}$')
 
     ax_chi.legend()
 
@@ -272,7 +272,7 @@ def plot_scaling(data, x_exp=(1, 1, 1),
                          color='black', linewidth=0.9)
 
         ax_xi.plot(T ** x_exp[1], data['invxi_min'][i], 'o-',
-                    markersize=4, color=color_list[i], label=f'$n = {n}$')
+                    markersize=4, color=color_list[i])
 
     # --- Right: either OZ OR Q ---
     if right == "OZ":

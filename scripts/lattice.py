@@ -6,6 +6,7 @@ from scripts.utils import *
 import spglib
 import numpy as np
 from mpi4py import MPI
+import gc
 
 class LATTICE:
 
@@ -71,7 +72,7 @@ class BZ:
         H_r = TBLattice(units=lat.units, hoppings=lat.hoppings)
 
         k_mesh = H_r.get_kmesh(nk_tuple)
-        k_full = np.asarray([k.value for k in k_mesh])
+        self.k_full = np.asarray([k.value for k in k_mesh]) if store_full_bz else None
 
         if ibz:
             mapping, ir_grid = spglib.get_ir_reciprocal_mesh(nk_tuple, lat.spg_cell)
@@ -83,7 +84,6 @@ class BZ:
             
             self.k_vecs = k_vecs
             self.w_k, self.ibz_idx, self.ibz_pos = w_k, ibz_idx, ibz_pos
-            self.k_full = k_full if store_full_bz else None
         
         else:
             k_mesh = H_r.get_kmesh(nk_tuple)
@@ -91,7 +91,6 @@ class BZ:
 
             self.w_k = np.ones(Nk)/Nk
             self.k_vecs = k_vecs
-            self.k_full = k_vecs if store_full_bz else None
 
         H_k = H_r.fourier(k_vecs/(2*np.pi))
         self.e_k = H_k[:,0,0].real
@@ -224,7 +223,6 @@ def get_de_kq_dq(e_k, q, nk, R_vecs, t_vals, method='fft', k_full=None):
     return de_kq_dq
 
 def share_bz(lat, nk, comm, ibz=True, store_full_bz=False):
-
     comm_node = comm.Split_type(MPI.COMM_TYPE_SHARED)
     node_rank = comm_node.Get_rank()
 
@@ -241,7 +239,6 @@ def share_bz(lat, nk, comm, ibz=True, store_full_bz=False):
     n_kvecs = N_ibz * dim
     n_kfull = N_full * dim if store_full_bz else 0
     n_wk    = N_ibz if ibz else 0
-
     n_f64 = N_ibz + n_kvecs + n_kfull + n_wk
     n_i64 = (N_ibz + N_full) if ibz else 0
 
@@ -261,14 +258,14 @@ def share_bz(lat, nk, comm, ibz=True, store_full_bz=False):
     if node_rank == 0:
         flat_f[s_e_k] = bz0.e_k
         flat_f[s_kvecs] = bz0.k_vecs.ravel()
-
         if store_full_bz:
             flat_f[s_kfull] = bz0.k_full.ravel()
-
         if ibz:
             flat_f[s_wk] = bz0.w_k
             flat_i[s_ibzidx] = bz0.ibz_idx
             flat_i[s_ibzpos] = bz0.ibz_pos
+        del bz0
+        gc.collect()
 
     comm_node.Barrier()
 
@@ -276,13 +273,12 @@ def share_bz(lat, nk, comm, ibz=True, store_full_bz=False):
     bz.nk  = nk
     bz.dim = dim
     bz.ibz = ibz
-
     bz.e_k     = flat_f[s_e_k]
     bz.k_vecs  = flat_f[s_kvecs].reshape(N_ibz, dim)
     bz.k_full  = flat_f[s_kfull].reshape(N_full, dim) if store_full_bz else None
     bz.w_k     = flat_f[s_wk] if ibz else None
     bz.ibz_idx = flat_i[s_ibzidx] if ibz else None
     bz.ibz_pos = flat_i[s_ibzpos] if ibz else None
-
     bz._wins = (win_f, win_i, comm_node)
+
     return bz

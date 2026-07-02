@@ -1,7 +1,7 @@
 import numpy as np
 from scripts.obs import sweep_rpa
 from scripts.lattice import LATTICE, share_bz
-from scripts.utils import merge_results, serialize
+from scripts.utils import merge_results
 from h5 import HDFArchive
 from mpi4py import MPI
 import time, resource
@@ -12,14 +12,16 @@ size = comm.Get_size()
 
 tp=0.
 lat = LATTICE(tp=tp)
-bz = share_bz(lat, nk=200, comm=comm)
-bz_fine = share_bz(lat, nk=400, comm=comm)
+bz = share_bz(lat, nk=300, comm=comm)
+#bz_fine = share_bz(lat, nk=600, comm=comm)
+bz_fine = None
 
-n_list = np.linspace(0.735, 0.755, 5)
-T_list = np.linspace(0.005, 0.015, 15)
+n_list = np.linspace(0.73, 0.91, 24)
+T_list = np.linspace(0., 0.06, 20)
 U = 3
 
 file_name = f'tp{tp:.5g}U{U:.5g}.h5'
+
 
 par_list = [[{'U': U, 'n': n, 'T': T} for T in T_list] for n in n_list]
 
@@ -30,7 +32,8 @@ print(f"rank {rank} got {len(my_jobs)} jobs")
 
 results_list = []
 for pars in my_jobs:
-    results_list.append(sweep_rpa(pars, lat, bz, bz_fine, q_path=([1,1,0.5],[1,1,1]), method='local', fit_grid_pts=False, verbose=False))
+    #results_list.append(sweep_rpa(pars, lat, bz, bz_fine, q_path=([1,1,0.5],[1,1,1]), method='local', #fit_grid_pts=False, verbose=False, xi_range=[0,0,5e-4]))
+    results_list.append(sweep_rpa(pars, lat, bz, bz_fine, niw=512, method='fft', S_list=-1j*0.025, verbose=False, xi_range=[0,0,2e-2]))
 
 t1 = time.time()
 peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
