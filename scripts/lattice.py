@@ -5,7 +5,7 @@ from triqs_tprf.tight_binding import TBLattice
 from scripts.utils import *  
 import spglib
 import numpy as np
-from numpy.polynomial.legendre import Legendre
+from mpi4py import MPI
 
 class LATTICE:
 
@@ -60,7 +60,7 @@ class LATTICE:
 
 class BZ:
     
-    def __init__(self, lat, nk, ibz=True):
+    def __init__(self, lat, nk, ibz=True, store_R_grid=True, store_full_bz=False):
         
         self.nk = nk
         self.dim = lat.dim
@@ -70,6 +70,9 @@ class BZ:
         nk_tuple = (nk,) * self.dim + (1,) * (3 - self.dim)
         H_r = TBLattice(units=lat.units, hoppings=lat.hoppings)
 
+        k_mesh = H_r.get_kmesh(nk_tuple)
+        k_full = np.asarray([k.value for k in k_mesh])
+
         if ibz:
             mapping, ir_grid = spglib.get_ir_reciprocal_mesh(nk_tuple, lat.spg_cell)
 
@@ -77,18 +80,20 @@ class BZ:
             w_k = np.bincount(mapping)[ibz_idx].astype(float)/Nk
             ibz_pos  = np.searchsorted(ibz_idx, mapping)
             k_vecs = (ir_grid[ibz_idx] / np.array(nk_tuple, dtype=float) * 2*np.pi)[:,:self.dim]
-
-            self.k_vecs, self.w_k = np.ascontiguousarray(k_vecs), w_k
-            self.ibz_idx, self.ibz_pos = ibz_idx, ibz_pos
+            
+            self.k_vecs = k_vecs
+            self.w_k, self.ibz_idx, self.ibz_pos = w_k, ibz_idx, ibz_pos
+            self.k_full = k_full if store_full_bz else None
         
         else:
             k_mesh = H_r.get_kmesh(nk_tuple)
-            k_vecs = np.array([k.value for k in k_mesh])
-            w_k = np.ones(Nk)/Nk
+            k_vecs = np.asarray([k.value for k in k_mesh])
 
-            self.k_vecs, self.w_k = np.ascontiguousarray(k_vecs), w_k
-    
-        H_k = H_r.fourier(self.k_vecs/(2*np.pi))
+            self.w_k = np.ones(Nk)/Nk
+            self.k_vecs = k_vecs
+            self.k_full = k_vecs if store_full_bz else None
+
+        H_k = H_r.fourier(k_vecs/(2*np.pi))
         self.e_k = H_k[:,0,0].real
     
     def to_dict(self):
@@ -153,7 +158,7 @@ def get_f_iwkq(f_iwk, q, nk, method='roll', f_iwR=None):
 
         return f_iwkq, df_iwkq_dq
 
-def get_e_kq(e_k, q, nk, method='roll', R_vecs=None, t_vals=None, phase_k=None):
+def get_e_kq(e_k, q, nk, method='roll', R_vecs=None, t_vals=None, k_full=None):
     dim = len(q)
     q = np.array(q)
     Nk = len(e_k)
@@ -163,36 +168,121 @@ def get_e_kq(e_k, q, nk, method='roll', R_vecs=None, t_vals=None, phase_k=None):
         shifts = tuple(-round(qi * nk / 2) % nk for qi in q)
         e_kq = np.roll(e_k_grid, shifts, axis=tuple(range(dim))).reshape(-1)
 
+    elif method == 'exact':
+        kq = k_full + q
+        phase_kq = np.exp(1j * np.pi * (kq @ R_vecs.T))
+        e_kq = np.sum(t_vals * phase_kq, axis=1)
+
     elif method == 'fft':
+
         phase_q = np.exp(1j * np.pi * (R_vecs @ q))
         t_phase_q = t_vals * phase_q
 
-        R_grid = np.zeros((nk,) * dim, dtype=complex)
+        R_grid = np.zeros((nk,) * dim, dtype=np.complex128)
         for tq, R in zip(t_phase_q, R_vecs):
             R_grid[tuple(int(r) % nk for r in R)] += tq
-        e_kq = np.fft.ifftn(R_grid).real.reshape(-1) * Nk
-    
-    elif method == 'exact':
-        phase_q = np.exp(1j * np.pi * (R_vecs @ q))
-        t_phase_q = t_vals * phase_q
 
-        e_kq = np.sum(phase_k * t_phase_q, axis=1).real
-        
+        e_kq = np.fft.ifftn(R_grid).real.ravel() * Nk
+
     return e_kq
-    
-def get_de_kq_dq(e_k, q, nk, R_vecs, t_vals):
+
+def get_de_kq_dq(e_k, q, nk, R_vecs, t_vals, method='fft', k_full=None):
     dim = len(q)
     q = np.array(q)
     Nk = len(e_k)
 
-    phase_q = np.exp(1j * np.pi * (R_vecs @ q))
-    t_phase_q = t_vals * phase_q
+    de_kq_dq = np.zeros((dim, Nk), dtype=np.float64)
 
-    de_kq_dq = np.zeros((dim, Nk))
-    for alpha in range(dim):
-        dR_grid = np.zeros((nk,) * dim, dtype=complex)
-        for tq, R in zip(1j * np.pi * R_vecs[:, alpha] * t_phase_q, R_vecs):
-            dR_grid[tuple(int(r) % nk for r in R)] += tq
-        de_kq_dq[alpha] = np.fft.ifftn(dR_grid).real.reshape(-1) * Nk
-    
+    if method == 'fft':
+
+        phase_q = np.exp(1j * np.pi * (R_vecs @ q))
+        t_phase_q = t_vals * phase_q
+
+        dR_grid = np.zeros((nk,) * dim, dtype=np.complex128)
+        R_idx = R_vecs.astype(np.int64)
+        for d in range(dim):
+
+            dR_grid.fill(0.0)
+
+            for tq, idx in zip(1j * np.pi * R_vecs[:, d] * t_phase_q, R_idx):
+                dR_grid[tuple(idx)] += tq
+
+            de_kq_dq[d] = np.fft.ifftn(dR_grid).real.ravel() * Nk
+
+    else:
+
+        kq = k_full + q
+        phase_kq = np.exp(1j * np.pi * (kq @ R_vecs.T))
+        t_phase_kq = t_vals * phase_kq
+
+        for d in range(dim):
+            de_kq_dq[d] = np.sum(
+                1j * np.pi * R_vecs[:, d] * t_phase_kq,
+                axis=1
+            ).real
+
     return de_kq_dq
+
+def share_bz(lat, nk, comm, ibz=True, store_full_bz=False):
+
+    comm_node = comm.Split_type(MPI.COMM_TYPE_SHARED)
+    node_rank = comm_node.Get_rank()
+
+    if node_rank == 0:
+        bz0 = BZ(lat, nk=nk, ibz=ibz, store_full_bz=store_full_bz)
+        N_ibz = len(bz0.e_k)
+        N_full = len(bz0.ibz_pos) if ibz else 0
+        meta = (N_ibz, N_full, bz0.nk, bz0.dim, ibz, store_full_bz)
+    else:
+        bz0 = meta = None
+
+    N_ibz, N_full, nk, dim, ibz, store_full_bz = comm_node.bcast(meta, root=0)
+
+    n_kvecs = N_ibz * dim
+    n_kfull = N_full * dim if store_full_bz else 0
+    n_wk    = N_ibz if ibz else 0
+
+    n_f64 = N_ibz + n_kvecs + n_kfull + n_wk
+    n_i64 = (N_ibz + N_full) if ibz else 0
+
+    win_f = MPI.Win.Allocate_shared(n_f64 * 8 if node_rank == 0 else 0, 8, comm=comm_node)
+    win_i = MPI.Win.Allocate_shared(n_i64 * 8 if node_rank == 0 else 0, 8, comm=comm_node)
+
+    flat_f = np.ndarray(n_f64, dtype=np.float64, buffer=win_f.Shared_query(0)[0])
+    flat_i = np.ndarray(n_i64, dtype=np.int64, buffer=win_i.Shared_query(0)[0]) if n_i64 else None
+
+    s_e_k    = slice(0, N_ibz)
+    s_kvecs  = slice(N_ibz, N_ibz + n_kvecs)
+    s_kfull  = slice(N_ibz + n_kvecs, N_ibz + n_kvecs + n_kfull)
+    s_wk     = slice(N_ibz + n_kvecs + n_kfull, N_ibz + n_kvecs + n_kfull + n_wk)
+    s_ibzidx = slice(0, N_ibz)
+    s_ibzpos = slice(N_ibz, N_ibz + N_full)
+
+    if node_rank == 0:
+        flat_f[s_e_k] = bz0.e_k
+        flat_f[s_kvecs] = bz0.k_vecs.ravel()
+
+        if store_full_bz:
+            flat_f[s_kfull] = bz0.k_full.ravel()
+
+        if ibz:
+            flat_f[s_wk] = bz0.w_k
+            flat_i[s_ibzidx] = bz0.ibz_idx
+            flat_i[s_ibzpos] = bz0.ibz_pos
+
+    comm_node.Barrier()
+
+    bz = BZ.__new__(BZ)
+    bz.nk  = nk
+    bz.dim = dim
+    bz.ibz = ibz
+
+    bz.e_k     = flat_f[s_e_k]
+    bz.k_vecs  = flat_f[s_kvecs].reshape(N_ibz, dim)
+    bz.k_full  = flat_f[s_kfull].reshape(N_full, dim) if store_full_bz else None
+    bz.w_k     = flat_f[s_wk] if ibz else None
+    bz.ibz_idx = flat_i[s_ibzidx] if ibz else None
+    bz.ibz_pos = flat_i[s_ibzpos] if ibz else None
+
+    bz._wins = (win_f, win_i, comm_node)
+    return bz

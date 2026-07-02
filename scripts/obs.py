@@ -61,23 +61,21 @@ def cexp(z):
 
 @njit
 def Fermi(z_k):
-    z_k_real = z_k.real
-    if z_k_real > 500.:
-        nF_k = 0. + 0.j
-    elif z_k_real < -500.:
-        nF_k = 1. + 0.j
+    if z_k > 500.:
+        nF_k = 0.
+    elif z_k < -500.:
+        nF_k = 1.
     else:
-        nF_k = 1. / (cexp(z_k) + 1.)
+        nF_k = 1. / (np.exp(z_k) + 1.)
 
     return nF_k
 
 @njit
 def dFermi(z_k):
-    z_k_real = z_k.real
-    if z_k_real > 500. or z_k_real > 500.:
-        dnF_k = 0. + 0.j
+    if z_k > 500. or z_k < -500.:
+        dnF_k = 0.
     else:
-        dnF_k = -cexp(z_k) / (cexp(z_k) + 1.)**2
+        dnF_k = -np.exp(z_k) / (np.exp(z_k) + 1.)**2
     return dnF_k
 
 @njit
@@ -88,7 +86,7 @@ def lindhard_ksp(mu, beta, e_k, e_kq, de_kq_dq=None):
         dim = de_kq_dq.shape[0]
         dchi0 = np.zeros(dim)
 
-    chi0 = 0.j
+    chi0 = 0.
     for k in range(Nk):
 
         e_k_eff = e_k[k]
@@ -111,15 +109,17 @@ def lindhard_ksp(mu, beta, e_k, e_kq, de_kq_dq=None):
         
         if de_kq_dq is not None and abs(de) > 1e-8:
             dnF_kq = dFermi(xkq)
-            for alpha in range(dim):
-                v = de_kq_dq[alpha, k]
+            for d in range(dim):
+                v = de_kq_dq[d, k]
                 num = (dnF_kq * beta * v) * de - (nF_k - nF_kq) * v
-                dchi0[alpha] += (num / de**2).real
+                dchi0[d] += num / de**2
 
     if de_kq_dq is None:
         dchi0 = None
+    else:
+        dchi0 /= Nk
     
-    return chi0.real, dchi0
+    return chi0/Nk, dchi0
 
 @njit
 def matsubara_ksp(mu, beta, e_k, e_kq, S_iwk, S_iwkq):
@@ -281,7 +281,7 @@ def niw_extrapolate(invchi0_func, niw, deg=2):
         invchi0_list.append(mesh_sub)
         niw_list.append(n_sub)
 
-    x = 1. / np.array(niw_list)
+    x = 1. / np.asarray(niw_list)
     y = np.stack(invchi0_list, axis=0)
 
     coeff = np.polyfit(x, y, deg=deg)
@@ -291,7 +291,6 @@ def niw_extrapolate(invchi0_func, niw, deg=2):
 
 def get_invchi0_grid(bz, mu, beta, q_path=None, method='fft', niw=1, S_val=None, niw_fit=False):
     
-    dim = bz.dim
     e_k = bz.e_k
     Nk = len(e_k)
 
@@ -332,7 +331,7 @@ def get_invchi0_grid(bz, mu, beta, q_path=None, method='fft', niw=1, S_val=None,
 
     elif method == 'fft':
 
-        G_iwk = np.array(get_G_iwk(mu, beta, e_k, S_iwk, niw))
+        G_iwk = np.asarray(get_G_iwk(mu, beta, e_k, S_iwk, niw))
 
         if niw_fit:
             chi0_func = lambda niw: matsubara_rsp(bz, beta, G_iwk[:niw+1])
@@ -354,7 +353,7 @@ def get_invchi0_grid(bz, mu, beta, q_path=None, method='fft', niw=1, S_val=None,
     q_min = q_grid[idx]
     invchi0_min = invchi0_grid[idx]
 
-    return np.array(q_min), invchi0_min, np.array(invchi0_grid)
+    return np.asarray(q_min), invchi0_min, np.asarray(invchi0_grid)
 
 def search_min(lat, bz, bz_fine, mu, beta, q_min, q_path=None):
     
@@ -375,7 +374,7 @@ def search_min(lat, bz, bz_fine, mu, beta, q_min, q_path=None):
     def invchi0_q_exact(s):
         q = start + np.dot(J, np.atleast_1d(s))
 
-        e_kq = get_e_kq(e_k, q, bz_fine.nk, method='fft', R_vecs=lat.R_vecs, t_vals=lat.t_vals)
+        e_kq = get_e_kq(e_k, q, bz_fine.nk, method='fft', R_vecs=lat.R_vecs, t_vals=lat.t_vals, k_full=bz_fine.k_full)
         de_kq_dq = get_de_kq_dq(e_k, q, bz_fine.nk, R_vecs=lat.R_vecs, t_vals=lat.t_vals)
 
         chi0, dchi0_dq = lindhard_ksp(mu, beta, e_k, e_kq, de_kq_dq=de_kq_dq)
@@ -424,9 +423,11 @@ def search_min(lat, bz, bz_fine, mu, beta, q_min, q_path=None):
     q_min = start + J @ s_min
     invchi0_min, _ = invchi0_q_exact(s_min)
 
-    return np.array(q_min), invchi0_min
+    return np.asarray(q_min), invchi0_min
 
-def fit_invxi(lat, finer_bz, mu, beta, q_min, U=None, q_path=None, invchi_grid=None, fit_range=[0,0,1e-2], fit_pts=10, fit_grid_pts=True, fit_qmin=False):
+def fit_invxi(lat, bz, bz_fine, mu, beta, q_min, U=None, q_path=None, invchi_grid=None, fit_range=[0,0,7e-3], fit_pts=10, fit_grid_pts=True, fit_qmin=False):
+
+    finer_bz = bz_fine if bz_fine is not None else bz
 
     nk = finer_bz.nk
     e_k = finer_bz.e_k
@@ -444,18 +445,19 @@ def fit_invxi(lat, finer_bz, mu, beta, q_min, U=None, q_path=None, invchi_grid=N
         # 1/chi0 for each q using Lindhard
         chi_grid = []
         for q in q_grid:
-            e_kq = get_e_kq(e_k, q, nk, method='fft', R_vecs=lat.R_vecs, t_vals=lat.t_vals)
+            e_kq = get_e_kq(e_k, q, nk, method='fft', R_vecs=lat.R_vecs, t_vals=lat.t_vals, k_full=finer_bz.k_full)
 
             chi0, _ = lindhard_ksp(mu, beta, e_k, e_kq)
             chi_grid.append(chi0/(1 - U*chi0))
     
     else:
         q_path = (start, stop)
-        q_grid, path_mask = get_grid_from_path(q_path, np.pi*q_grid)
-        chi_grid = 1/np.array(invchi_grid)[path_mask]
+        k_grid = bz.k_vecs
+        q_grid, path_mask = get_grid_from_path(q_path, k_grid)
+        chi_grid = 1/np.asarray(invchi_grid)[path_mask]
     
-    p0 = [0.01, 0., abs(1/chi_grid[len(chi_grid)//2]), 0.01]
-    bounds = ([0., -np.inf, 0., 0.], [1., np.inf, np.inf, np.inf])
+    p0 = [0.01, 0., abs(1/chi_grid[len(chi_grid)//2])]
+    bounds = ([0., -1., 0.], [1., 1., np.inf])
 
     e_hat = (stop - start)
     e_hat /= np.linalg.norm(e_hat)
@@ -468,23 +470,28 @@ def fit_invxi(lat, finer_bz, mu, beta, q_min, U=None, q_path=None, invchi_grid=N
         bounds[1].append(s0 + 4/nk)
         OZ_fit = OZ
     else:
-        OZ_fit = lambda s, a, b, invxi, eta: OZ(s, a, b, invxi, eta, s0)
+        OZ_fit = lambda s, a, b, invxi: OZ(s, a, b, invxi, s0)
 
     try:
         par, _ = curve_fit(OZ_fit, s_grid, chi_grid, p0=p0, bounds=bounds, maxfev=10000)
         if fit_qmin:
-            new_q_min = q_min - (q_min @ e_hat)*e_hat + par[4]*e_hat
+            new_q_min = q_min - (q_min @ e_hat)*e_hat + par[3]*e_hat
         else:
             new_q_min = np.array([np.nan]*len(q_min))
             par = np.append(par, s0)
     
     except RuntimeError:
-        par = np.array([np.nan]*5)
+        par = np.array([np.nan]*4)
         new_q_min = np.array([np.nan]*len(q_min))
 
     return par, new_q_min
 
 def density_k(e_k, S_k, mu, beta, w_k):
+
+    Nk = len(e_k)
+    if w_k is None:
+        w_k = np.ones(Nk)/Nk
+
     x  = e_k + S_k.real - mu
     xr = np.clip(beta * x, -500, 500)
     xi = beta * S_k.imag
@@ -504,6 +511,9 @@ def density_iwk(e_k, S_iwk, mu, beta, w_k, tail):
     Nk = e_k.shape[0]
     niw = S_iwk.shape[0]
     len_Sk = S_iwk.shape[1]
+
+    if w_k is None:
+        w_k = np.ones(Nk)/Nk
 
     n_tot = 0.0
     for k in range(Nk):
@@ -564,7 +574,7 @@ def get_mu(e_k, n_goal, beta, niw=1, S_val=None, w_k=None, niw_extr=False):
     
     return brentq(f, a, b)
 
-def run_rpa(par, lat, bz, bz_fine=None, niw=1, S_val=None, q_path=None, method='fft', get_xi=False, xi_range=[0,0,1e-2], xi_pts=15, fit_grid_pts=True, always_fit_qmin=False, niw_fit=False, store_inputs=True, verbose=True, file_name=None):
+def run_rpa(par, lat, bz, bz_fine=None, niw=1, S_val=None, q_path=None, method='fft', get_xi=True, xi_range=[0,0,7e-3], xi_pts=15, fit_grid_pts=True, always_fit_qmin=False, niw_fit=False, store_inputs=True, verbose=True, file_name=None):
 
     # Stores every input inside a dictionary
     if store_inputs:
@@ -601,17 +611,17 @@ def run_rpa(par, lat, bz, bz_fine=None, niw=1, S_val=None, q_path=None, method='
 
             fit_qmin = bz_fine is None or always_fit_qmin
 
-            run_data['OZ_fit'], run_data['Q_fitted'] = fit_invxi(lat, finer_bz, mu, 1/T, Q, U, q_path, invchi0_grid.real-U, xi_range, xi_pts, fit_grid_pts, fit_qmin)
+            run_data['OZ_fit'], run_data['Q_fitted'] = fit_invxi(lat, bz, bz_fine, mu, 1/T, Q, U, q_path, invchi0_grid.real-U, xi_range, xi_pts, fit_grid_pts, fit_qmin)
 
             invxi = run_data['OZ_fit'][2]
             OZ_weight = run_data['OZ_fit'][0]
 
-            if bz_fine is not None and not np.isnan(run_data['Q_fitted'][0]):
+            if bz_fine is None and not np.isnan(run_data['Q_fitted'][0]):
                 Q = run_data['Q_fitted']
                 invchi_Q = (run_data['OZ_fit'][2]**2)/run_data['OZ_fit'][0]
                     
         else:
-            run_data['OZ_fit'] = np.array([np.nan]*5)
+            run_data['OZ_fit'] = np.array([np.nan]*4)
             invxi = np.nan
             OZ_weight = np.nan
             run_data['Q_fitted'] = np.array([np.nan]*lat.dim)
@@ -640,11 +650,10 @@ def run_rpa(par, lat, bz, bz_fine=None, niw=1, S_val=None, q_path=None, method='
     
     return run_data
           
-def sweep_rpa(par_list, lat, bz, bz_fine=None, niw=1, S_list=None, q_path=None, method='fft', get_xi=False, xi_range=[0,0,1e-2], xi_pts=15, fit_grid_pts=True, always_fit_qmin=False, fit=False, fit_type=HMM, niw_fit=False, file_name=None, verbose=True):
+def sweep_rpa(par_list, lat, bz, bz_fine=None, niw=1, S_list=None, q_path=None, method='fft', get_xi=True, xi_range=[0,0,1e-2], xi_pts=15, fit_grid_pts=True, always_fit_qmin=False, fit=False, fit_type=HMM, niw_fit=False, file_name=None, verbose=True):
 
     # Stores every input inside a dictionary
     sweep_data = {k: v for k, v in locals().items() if k != "par_list"}
-    sweep_data = serialize(sweep_data)
 
     if verbose:
         print('='*50)
@@ -652,19 +661,6 @@ def sweep_rpa(par_list, lat, bz, bz_fine=None, niw=1, S_list=None, q_path=None, 
 
     # Extract the parameter list for the loop
     sweep_length = len(par_list)
-    varying_key = []
-    for key in par_list[0].keys():
-        values = {par[key] for par in par_list}
-        if len(values) > 1:
-            varying_key.append(key)
-    
-    if len(varying_key) > 1:
-        print("Only one parameter can vary among U, T and n for each sweep!")
-        sys.exit()
-    else:
-        varying_key = varying_key[0]
-    
-    varying_par = [par[varying_key] for par in par_list]
 
     if isinstance(S_list, (list, np.ndarray)) and len(S_list) == sweep_length:
         pass
@@ -673,28 +669,35 @@ def sweep_rpa(par_list, lat, bz, bz_fine=None, niw=1, S_list=None, q_path=None, 
 
     results_list = []
     for i, par in enumerate(par_list):
-        results_list.append(run_rpa(par, lat, bz, bz_fine, niw, S_list[i], q_path, method, get_xi, xi_range, xi_pts, fit_grid_pts, always_fit_qmin, niw_fit, store_inputs=False, verbose=False, file_name=None))
+        results_list.append(run_rpa(par, lat, bz, bz_fine, niw, S_list[i], q_path, method, get_xi, xi_range, xi_pts, fit_grid_pts, 
+                                    always_fit_qmin, niw_fit, store_inputs=False, verbose=False, file_name=None))
     
-    results = {key: np.array([d[key] for d in results_list]) for key in results_list[0]}
+    merged = merge_results(results_list, ['invchi', 'invchi_min', 'invxi_min', 'Q', 'OZ_fit', 'OZ_weight', 'Q_fitted', 'mu'])
+    sweep_data.update(merged)
+
+    for key in ['U', 'T', 'n']:
+        if isinstance(sweep_data[key], (list, np.ndarray)):
+            varying_key = key
+            varying_par = sweep_data[key]
+            break
 
     if fit:
+
         if not isinstance(fit_type, (list, np.ndarray)):
             fit_type = [fit_type]
         
-        results['fitchi'] = {}
+        sweep_data['fitchi'] = {}
         if get_xi:
-            results['fitxi'] = {}
+            sweep_data['fitxi'] = {}
 
         par_keys = ['a', 'b', 'Xc']
         for label in par_keys:
-            results['fitchi'][label] = []
-            results['fitchi'][f'{label}_err'] = []
+            sweep_data['fitchi'][label] = []
 
             if get_xi:
-                results['fitxi'][label] = []
-                results['fitxi'][f'{label}_err'] = []
+                sweep_data['fitxi'][label] = []
 
-        results['Qc'], results['mu_c'] = [], []
+        sweep_data['Qc'], sweep_data['mu_c'] = [], []
 
         for fit in fit_type:
 
@@ -703,29 +706,27 @@ def sweep_rpa(par_list, lat, bz, bz_fine=None, niw=1, S_list=None, q_path=None, 
                 labels_to_fit.append('xi')
 
             for label in labels_to_fit:
-                pos_mask = results[f'inv{label}'] > 0
+                pos_mask = sweep_data[f'inv{label}'] > 0
                 x_fit = np.array(varying_par)[pos_mask][:10]
-                y_fit = results[f'inv{label}'][pos_mask][:10]
+                y_fit = sweep_data[f'inv{label}'][pos_mask][:10]
 
                 if len(x_fit) >= 2:
                     try:
                         p0 = [1., 1., np.min(x_fit) * 0.9]
                         bounds = ([0., 0., -np.inf], [np.inf, np.inf, np.inf])
-                        par, cov = curve_fit(fit, x_fit, y_fit, p0=p0, bounds=bounds, maxfev=10000)
+                        par, _ = curve_fit(fit, x_fit, y_fit, p0=p0, bounds=bounds, maxfev=10000)
 
                         for i, key in enumerate(par_keys):
-                            results[f'fit{label}'][key].append(par[i])
-                            err = np.sqrt(cov[i, i])
-                            results[f'fit{label}'][f'{key}_err'].append(err)
+                            sweep_data[f'fit{label}'][key].append(par[i])
                         
                         if label == 'chi':
-                            Q_vals = results['Q'][pos_mask][:2]
+                            Q_vals = sweep_data['Q'][pos_mask][:2]
                             m = (Q_vals[1] - Q_vals[0])/(x_fit[1] - x_fit[0])
-                            results['Qc'].append(Q_vals[0] - m * (x_fit[0] - np.maximum(0., results[f'fit{label}']['Xc'])))
+                            sweep_data['Qc'].append(Q_vals[0] - m * (x_fit[0] - np.maximum(0., sweep_data[f'fit{label}']['Xc'])))
 
-                            mu_vals = results['mu'][pos_mask][:2]
+                            mu_vals = sweep_data['mu'][pos_mask][:2]
                             m = (mu_vals[1] - mu_vals[0])/(x_fit[1] - x_fit[0])
-                            results['mu_c'].append(mu_vals[0] - m * (x_fit[0] - np.maximum(0., results[f'fit{label}']['Xc'])))
+                            sweep_data['mu_c'].append(mu_vals[0] - m * (x_fit[0] - np.maximum(0., sweep_data[f'fit{label}']['Xc'])))
                         
                         converged = True
 
@@ -738,21 +739,19 @@ def sweep_rpa(par_list, lat, bz, bz_fine=None, niw=1, S_list=None, q_path=None, 
 
                 if not converged:
                     for i, key in enumerate(par_keys):
-                        results[f'fit{label}'][key].append(np.nan)
-                        results[f'fit{label}'][f'{key}_err'].append(np.nan)
+                        sweep_data[f'fit{label}'][key].append(np.nan)
 
                     if label == 'chi':
-                        results['Qc'].append(np.array([np.nan]*lat.dim))
-                        results['mu_c'].append(np.array([np.nan]))
+                        sweep_data['Qc'].append(np.array([np.nan]*lat.dim))
+                        sweep_data['mu_c'].append(np.array([np.nan]))
                 
         if len(fit_type) == 1:
             for label in labels_to_fit:
                 for key in par_keys:
-                    results[f'fit{label}'][key] = results[f'fit{label}'][key][0]
-                    results[f'fit{label}'][f'{key}_err'] = results[f'fit{label}'][f'{key}_err'][0]
+                    sweep_data[f'fit{label}'][key] = sweep_data[f'fit{label}'][key][0]
 
-            results['Qc'] = results['Qc'][0]
-            results['mu_c'] = results['mu_c'][0]
+            sweep_data['Qc'] = sweep_data['Qc'][0]
+            sweep_data['mu_c'] = sweep_data['mu_c'][0]
 
     if file_name is not None:
         with HDFArchive(file_name, 'w') as ar:
@@ -766,4 +765,4 @@ def sweep_rpa(par_list, lat, bz, bz_fine=None, niw=1, S_list=None, q_path=None, 
         print(f"\r{const_keys[0]}: {const_pars[0]:.5g}, {const_keys[1]}: {const_pars[1]:.5g}: "
               f"Completed {sweep_length} jobs in {elapsed_time:.1f} seconds")
 
-    return sweep_data
+    return serialize(sweep_data)

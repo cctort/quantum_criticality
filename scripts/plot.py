@@ -7,6 +7,8 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import matplotlib.gridspec as gridspec
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+from fractions import Fraction
 #mpl.rcParams['figure.dpi']=100
 
 mpl.rcParams.update({
@@ -25,453 +27,317 @@ import seaborn as sns
 color_list = sns.color_palette('colorblind') + sns.color_palette("Set2") + sns.color_palette("Set3")
 
 
-def prun_dmft(dmft, U, title='', label='', figure=None):
-   
-    G_iw = dmft.G_iw
-    S_iw = dmft.S_iw
-    W = 4*dmft.lattice.dim*dmft.lattice.t
+def plot_chimin(data):
 
-    # Padé Analytic Continuation (A(w) = -1/pi * Im G(w+i0+))
-    g_w = GfReFreq(indices=[0], window=(-U-W, U+W), n_points=1000)
-    
-    g_w.set_from_pade(G_iw, n_points=1000) 
-    A_w = -1.0/np.pi * g_w.imag
+    fig = plt.figure(figsize=(12, 6))
+    gs = fig.add_gridspec(1, 2, width_ratios=[2, 1])
 
-    # Frequency mesh (real and imag)
-    iw = np.array([float(freq.imag) for freq in S_iw.mesh])
-    w = np.array([float(freq) for freq in A_w.mesh])
+    ax = [fig.add_subplot(gs[0, 0]), fig.add_subplot(gs[0, 1])]
 
-    if figure is None:
+    ax[0].set_xlabel('$q_z/\pi$')
+    ax[0].set_ylabel(r'$\chi^{-1}_m(\pi,\pi,q_z)$')
+
+    ax[1].set_xlabel('$T$')
+    ax[1].set_ylabel('$Q_z/\pi$')
+
+    axins = inset_axes(
+        ax[0],
+        width="30%",
+        height="40%",
+        bbox_transform=ax[0].transAxes,
+        #bbox_to_anchor=(0.1, 0.08, 1, 1),
+        bbox_to_anchor=(0.63, 0.08, 1, 1),
+        loc="lower left"
+    )
+
+    axins.set_facecolor((0.98, 0.98, 0.98, 0.7))
+
+    q_grid = np.linspace(data['q_path'][0], data['q_path'][-1], len(data['invchi'][0]))
+    qz_grid = q_grid[:,-1]
+
+    Qz = qz_grid[np.argmin(data['invchi'], axis=1)]
+    Qz_ref = data['Q'][:,-1]
+    Qz_fit = data['Q_fitted'][:,-1]
+
+    for i, T in enumerate(data['T']):
+
+        plot_every = 4
+        if i % plot_every == 0:
+
+            ax[0].plot(
+                qz_grid,
+                data['invchi'][i],
+                'o-',
+                markersize=2,
+                label=f'T={T:.4g}',
+                color=color_list[i//plot_every],
+                zorder=-i
+            )
+
+            qz_grid_fitted = np.linspace(
+                Qz_fit[i]-data['xi_range'][-1],
+                Qz_fit[i]+data['xi_range'][-1],
+                data['xi_pts']
+            )
+
+            OZ_curve = [1/OZ(qz, *data['OZ_fit'][i]) for qz in qz_grid_fitted]
+
+            ax[0].plot(
+                qz_grid_fitted,
+                OZ_curve,
+                '--',
+                color='black',
+                linewidth=1,
+                zorder=-i
+            )
+
+            ax[0].plot(
+                Qz_fit[i],
+                1/OZ(Qz_fit[i], *data['OZ_fit'][i]),
+                'x',
+                markersize=4,
+                color='black',
+                zorder=-i
+            )
+
+            ax[0].plot(
+                Qz_ref[i],
+                data['invchi_min'][i],
+                '*',
+                markersize=2,
+                color='red',
+                zorder=-i
+            )
+
+    qz_grid_fitted = np.linspace(
+        Qz_fit[0] - data['xi_range'][-1],
+        Qz_fit[0] + data['xi_range'][-1],
+        data['xi_pts']
+    )
+
+    mask = np.abs(qz_grid - Qz_ref[0]) < 4e-2
+    OZ_curve = [1/OZ(qz, *data['OZ_fit'][0]) for qz in qz_grid_fitted]
+
+    axins.plot(
+        qz_grid[mask],
+        data['invchi'][0][mask],
+        'o-',
+        markersize=5,
+        color=color_list[0],
+        zorder=0
+    )
+
+    axins.plot(
+        qz_grid_fitted,
+        OZ_curve,
+        '--',
+        color='black',
+        linewidth=1.2,
+        zorder=1
+    )
+
+    axins.scatter(
+        Qz_fit[0],
+        1/OZ(Qz_fit[0], *data['OZ_fit'][0]),
+        marker='x',
+        s=30,
+        linewidths=1.8,
+        color='black',
+        label='from OZ fit',
+        zorder=2
+    )
+
+    axins.scatter(
+        Qz_ref[0],
+        data['invchi_min'][0],
+        marker='*',
+        s=20,
+        linewidths=1.8,
+        color='red',
+        label='exact',
+        zorder=3
+    )
+
+    axins.grid(True)
+    axins.tick_params(labelsize=15)
+    axins.legend(loc='upper right', fontsize=12)
+
+    idx_max = np.argmax(data['invchi'][0][mask])
+    axins.set_ylim(0, (data['invchi'][0][mask][idx_max]+max(np.delete(data['invchi'][0][mask], idx_max)))/2)
+
+    ax[1].plot(
+        data['T'],
+        Qz,
+        'o-',
+        markersize=4,
+        color='steelblue',
+        label='from $q$ grid'
+    )
+
+    ax[1].plot(
+        data['T'],
+        Qz_ref,
+        '--',
+        color='red',
+        label='exact'
+    )
+
+    ax[1].plot(
+        data['T'],
+        Qz_fit,
+        '--',
+        color='black',
+        linewidth=0.8,
+        label='from OZ fit'
+    )
+
+    for a in ax:
+        a.grid()
         
-        fig = plt.figure(figsize=(12, 5))
-        axs = [None]*3
+    ax[0].legend(loc='upper left')
+    ax[1].legend()
 
-        axs[0] = fig.add_subplot(2, 2, 1)
-        axs[0].set_xlim(0, 8)
-        axs[0].set_xlabel(r'$i\omega_n$')
-        axs[0].set_ylabel(r'Re $\Sigma(i\omega_n)$')
-        axs[0].set_title('Self-energy (real part)')
+    ax[1].set_xlim(left=0.)
+    ax[0].set_xlim(0.5,1)
+    axins.set_xlim(max(Qz_ref[0]-3e-2,0.5), min(Qz_ref[0]+3e-2,1))
+    ax[0].set_ylim(bottom=0.)
 
-        axs[1] = fig.add_subplot(2, 2, 3)
-        axs[1].set_xlim(0, 8)
-        axs[1].set_xlabel(r'$i\omega_n$')
-        axs[1].set_ylabel(r'Im $\Sigma(i\omega_n)$')
-        axs[1].set_title('Self-energy (imaginary part)')
-
-        axs[2] = fig.add_subplot(1, 2, 2)
-        axs[2].set_xlabel(r'$\omega$')
-        axs[2].set_ylabel(r'$A(\omega)$')
-        axs[2].set_title(f'Spectral Density (from Padé continuation)')
-        axs[2].set_xlim(-W-U, W+U)
-
-        for i in range(3):
-            axs[i].grid()
-
-    else:
-
-        fig, axs = figure
-
-    num_plots = len(axs[0].lines)
-    color = color_list[num_plots % len(color_list)]
-
-    axs[0].plot(iw, S_iw.real.data[:,0,0], 'o--', markersize=4, color=color, label=label)
-    axs[1].plot(iw, S_iw.imag.data[:,0,0], 'o--', markersize=4, color=color, label=label)
-    axs[2].plot(w, A_w.data[:,0,0], lw=2, color=color)
-    axs[2].axvline(U/2, linestyle='--', alpha=0.5, label=rf'$\pm U/2$ ({label})', color=color)
-    axs[2].axvline(-U/2, linestyle='--', alpha=0.5, color=color)
-    axs[2].fill_between(w, 0, A_w.data[:,0,0], alpha=0.2, color=color)
-    axs[2].set_ylim(bottom=0)
-    for i in range(3):
-        axs[i].legend()
-
-    fig.suptitle(rf'Self-energy - {title}')
     fig.tight_layout()
+    return fig
 
-    Z, gamma, tau = get_Z(S_iw.data[:,0,0], dmft.beta, dmft.n_iw)
-
-    print(f'quasi-particle weight : Z = {Z:.3e}')
-    print(f'quasi-particle scattering rate : gamma = {gamma:.3e}')
-    print(f'quasi-particle lifetime : tau = {tau:.3e}')
-
-    return fig, axs
-
-def prun_chi_path(dmft, k_path, title='', label='', figure=None):
-
-    if figure is None:
-        
-        fig = plt.figure(figsize=(12, 5))
-        axs = [None]*3
-
-        axs[0] = fig.add_subplot(2, 2, 1)
-        axs[0].set_ylabel(r'$\chi_0^{-1}(\mathbf{k},0)$')
-        axs[0].set_title('non-interacting susceptibility')
-
-        axs[1] = fig.add_subplot(2, 2, 3)
-        axs[1].set_ylabel(r'$\chi_{RPA}^{-1}(\mathbf{k},0)$')
-        axs[1].set_title('RPA susceptibility')
-
-        axs[2] = fig.add_subplot(1, 2, 2)
-        axs[2].set_title('Brillouin Zone Path')
-        axs[2].set_xlabel(r'$k_x$')
-        axs[2].set_ylabel(r'$k_y$')
-        axs[2].set_aspect('equal')
-
-        for i in range(3):
-            axs[i].grid()
-
-    else:
-
-        fig, axs = figure
-
-    fig.suptitle(rf'Susceptibility - {title}')
-    fig.tight_layout()
-
-    num_plots = len(axs[0].lines)
-    color = color_list[num_plots % len(color_list)]
-
-    k_labels = [p[0] for p in k_path]
-    k_points = [p[1] for p in k_path]
-    path = [(k_points[i], k_points[i+1]) for i in range(len(k_points)-1)]
-
-    k_vecs, k_plot, k_ticks = k_space_path(path, num=32, bz=dmft.H_r.bz)
-    k = np.linspace(-np.pi, np.pi, num=100)
-    kx, ky = np.meshgrid(k, k)
-
-    eps_k_grid = np.vectorize(lambda kx, ky : dmft.eps_k((kx, ky, 0)).real[0,0])(kx, ky)
-    invchi0_iwk_path = np.vectorize(lambda k : 1/dmft.chi0_iwk(0,k).real[0,0,0,0], signature='(n)->()')
-    invchi_iwk_path = np.vectorize(lambda k : 1/dmft.chi_rpa_iwk(0,k).real[0,0,0,0], signature='(n)->()')
-
-    for i in range(2):
-        axs[i].set_xticks(k_ticks, labels=k_labels)
+def plot_scaling(data, x_exp=(1, 1, 1),
+                 fit=False, origin=True, right="OZ"):
     
-    axs[0].plot(k_plot, invchi0_iwk_path(k_vecs), '--', color=color, label=label)
-    axs[1].plot(k_plot, invchi_iwk_path(k_vecs), '--', color=color, label=label)
+    T = data['T']
+    dim = data['lat']['dim']
 
-    if figure is None: # We assume that multiple calls refer to the same path in the same BZ
+    def x_axis_label(exp):
+        if exp == 1:
+            return 'T'
+        elif exp == 0.5:
+            return r'$\sqrt{T}$'
 
-        path_x = np.array([p[0]*np.pi for p in k_points])
-        path_y = np.array([p[1]*np.pi for p in k_points])
-        
-        mu = dmft.convergence['mu'][-1]
-        U = dmft.U
+        frac = Fraction(exp).limit_denominator(100)
 
-        cont = axs[2].contour(kx, ky, eps_k_grid,levels=50,cmap='RdBu')
-        axs[2].contour(kx, ky, eps_k_grid,levels=[mu-U/2],colors='black',linestyles='dotted',linewidths=2)
-        cbar = fig.colorbar(cont, ax=axs[2])
-        cbar.set_label(r'$\epsilon(\mathbf{k})$')
-        axs[2].plot(path_x, path_y, 'o', color='indianred', markersize=5)
-        for i in range(len(k_points)-1):
-            axs[2].annotate('', xy=(path_x[i+1], path_y[i+1]), xytext=(path_x[i], path_y[i]), arrowprops=dict(arrowstyle='->',linewidth=2,color='black'))
+        if frac.denominator == 1:
+            return rf'$T^{{{frac.numerator}}}$'
 
-        #axs[2].quiver(path_x[:-1]+path_x[1:], path_y[:-1]+path_y[1:], np.diff(path_x), np.diff(path_y), angles='xy', scale_units='xy', scale=3, color=color)
-        for txt, x, y in zip(k_labels, path_x, path_y):
-            axs[2].annotate(txt, (x, y), textcoords="offset points", xytext=(5,5), ha='center', fontweight='bold')
-
-    return fig, axs
-
-
-def prun_chi(chi_iwk, title='', label='', figure=None, shape=(1,1,1)):
-
-    row, col, pos = shape
-
-    if figure is None:
-        fig = plt.figure(figsize=(12, 5))
-        axs = [None]*row*col
-
-        for i in range(row*col):
-            axs[i] = fig.add_subplot(row, col, i+1)
-            axs[i].set_xlabel(r'$k_x$')
-            axs[i].set_ylabel(r'$k_y$')
-            axs[i].grid()
-            axs[i].set_aspect('equal')
-
-    else:
-
-        fig, axs = figure
-
-    k = np.linspace(0., 2*np.pi, num=100)
-    kx, ky = np.meshgrid(k, k)
-    invchi_rpa_grid = np.vectorize(lambda kx, ky : 1/chi_iwk(0, (kx, ky, 0)).real[0,0,0,0])(kx, ky)
-
-    cont = axs[pos-1].contour(kx/np.pi, ky/np.pi, invchi_rpa_grid, levels=50, cmap='RdBu')
-    axs[pos-1].contour(kx/np.pi, ky/np.pi, invchi_rpa_grid, levels=[0], colors='black', linestyles='dotted', linewidths=2)
-    cbar = fig.colorbar(cont, ax=axs[pos-1])
-    cbar.set_label(r'$\chi_{RPA}^{-1}(\mathbf{k})$')
-    axs[pos-1].set_title(label)
-
-    fig.suptitle(rf'Susceptibility - {title}')
-    if pos == row*col:
-        fig.tight_layout()
-
-    return fig, axs
-
-
-def prun_conv(dmft, U, density, title='', label='', figure=None):
+        return rf'$T^{{{frac.numerator}/{frac.denominator}}}$'
     
-    convergence = dmft.convergence
+    fig = plt.figure(figsize=(12, 6))
 
-    if figure is None:
-        
-        fig = plt.figure(figsize=(12, 5))
-        axs = [None]*6
+    outer_gs = gridspec.GridSpec(
+        1, 3 if right == "OZ" else 3,
+        figure=fig,
+        width_ratios=[1, 1, 1.1]
+    )
 
-        axs[0] = fig.add_subplot(2, 3, 1)
-        axs[0].set_xlabel('Iterations')
-        axs[0].set_ylabel(r'$\Sigma$ residuals')
-        axs[0].set_yscale('log')
+    # --- Left: chi ---
+    ax_chi = fig.add_subplot(outer_gs[0])
+    ax_chi.set_xlabel(x_axis_label(x_exp[0]))
+    ax_chi.set_ylabel(r'$\chi^{-1}_m(\overline{\mathbf{q}},T,n)$')
+    ax_chi.set_title('Susceptibility')
+    ax_chi.grid()
 
-        axs[1] = fig.add_subplot(2, 3, 4)
-        axs[1].set_xlabel('Iterations')
-        axs[1].set_ylabel(r'$\alpha$')
+    for i, n in enumerate(data['n']):
+        pos_idx = np.where(data['invchi_min'][i] > 0)
+        if fit and len(pos_idx[0]) > 2:
+            fp = np.polyfit(T[pos_idx][:15] ** x_exp[0],
+                            data['invchi_min'][i][pos_idx][:15], 1)
+            x0 = T[pos_idx][0] ** x_exp[0]
+            ax_chi.axline((x0, x0 * fp[0] + fp[1]),
+                          slope=fp[0], linestyle='--',
+                          color='black', linewidth=0.9)
 
-        axs[2] = fig.add_subplot(2, 3, 2)
-        axs[2].set_xlabel('Iterations')
-        axs[2].set_ylabel(r'$n-n_{goal}$')
+        ax_chi.plot(T ** x_exp[0], data['invchi_min'][i], 'o-',
+                     markersize=4, color=color_list[i], label=f'$n = {n}$')
 
-        axs[3] = fig.add_subplot(2, 3, 5)
-        axs[3].set_xlabel('Iterations')
-        axs[3].set_ylabel(r'$\mu/U$')
+    ax_chi.legend()
 
-        axs[4] = fig.add_subplot(2, 3, 3)
-        axs[4].set_xlabel('Iterations')
-        axs[4].set_ylabel(r'$n_0-n_{goal}$')
+    # --- Middle: xi ---
+    ax_xi = fig.add_subplot(outer_gs[1])
+    ax_xi.set_xlabel(x_axis_label(x_exp[1]))
+    ax_xi.set_ylabel(r'$\xi^{-1}_m(T,n)$')
+    ax_xi.set_title('Correlation length')
+    ax_xi.grid()
 
-        axs[5] = fig.add_subplot(2, 3, 6)
-        axs[5].set_xlabel('Iterations')
-        axs[5].set_ylabel(r'$\mu_0/U$')
+    for i, n in enumerate(data['n']):
+        pos_idx = np.where(data['invxi_min'][i] > 0)
+        if fit and len(pos_idx[0]) > 2:
+            fp = np.polyfit(T[pos_idx][:15] ** x_exp[1],
+                            data['invxi_min'][i][pos_idx][:15], 1)
+            x0 = T[pos_idx][0] ** x_exp[1]
+            ax_xi.axline((x0, x0 * fp[0] + fp[1]),
+                         slope=fp[0], linestyle='--',
+                         color='black', linewidth=0.9)
 
-        for i in range(6):
-            axs[i].grid()
-    
+        ax_xi.plot(T ** x_exp[1], data['invxi_min'][i], 'o-',
+                    markersize=4, color=color_list[i], label=f'$n = {n}$')
+
+    # --- Right: either OZ OR Q ---
+    if right == "OZ":
+        right_rows = 1
+    elif right == "Q":
+        right_rows = dim
     else:
+        raise ValueError("right must be 'OZ' or 'Q'")
 
-        fig, axs = figure
+    right_gs = gridspec.GridSpecFromSubplotSpec(
+        right_rows, 1, subplot_spec=outer_gs[2], hspace=0.1
+    )
+    right_axes = [fig.add_subplot(right_gs[i]) for i in range(right_rows)]
 
-    num_plots = len(axs[0].lines)
-    color = color_list[num_plots % len(color_list)]
+    row = 0
 
-    iterations = np.arange(1,len(convergence['diff'])+1)
-    axs[0].plot(iterations, convergence['diff'], '.--', markersize=4, color=color, label=label, alpha=1.)
-    axs[0].legend()
+    if right == "OZ":
+        ax_OZ = right_axes[row]
+        ax_OZ.set_ylabel(r'$\mathcal{A}(T)$')
+        ax_OZ.set_xlabel(x_axis_label(x_exp[2]))
+        ax_OZ.set_title(r'OZ weight')
+        ax_OZ.grid()
 
-    axs[1].plot(iterations, convergence['alpha'], '.--', markersize=4, color=color, label=label, alpha=1.)
-    axs[1].legend()
+        for i, n in enumerate(data['n']):
+            pos_idx = np.where(data['OZ_weight'][i] > 0)
+            if fit and len(pos_idx[0]) > 2:
+                fp = np.polyfit(T[pos_idx][:15] ** x_exp[2],
+                                data['OZ_weight'][i][pos_idx][:15], 1)
+                x0 = T[pos_idx][0] ** x_exp[2]
+                ax_OZ.axline((x0, x0 * fp[0] + fp[1]),
+                             slope=fp[0], linestyle='--',
+                             color='black', linewidth=0.9)
 
-    axs[2].plot(iterations, np.array(convergence['n'])-density, '.--', markersize=4, color=color, label=label, alpha=1.)
-    axs[2].legend()
+            ax_OZ.plot(T ** x_exp[2], data['OZ_weight'][i],
+                       'o-', markersize=4, color=color_list[i],
+                       label=f'$n = {n}$')
 
-    axs[3].plot(iterations, np.array(convergence['mu'])/U, '.--', markersize=4, color=color, label=label, alpha=1.)
-    axs[3].legend()
+    elif right == "Q":
+        Q_label = [r'$\overline{q}_x/\pi$', r'$\overline{q}_y/\pi$', r'$\overline{q}_z/\pi$']
 
-    axs[4].plot(iterations, np.array(convergence['n0'])-density, '.--', markersize=4, color=color, label=label, alpha=1.)
-    axs[4].legend()
-
-    axs[5].plot(iterations, np.array(convergence['mu0'])/U, '.--', markersize=4, color=color, label=label, alpha=1.)
-    axs[5].legend() 
-
-    fig.suptitle(rf'Convergence - {title}')
-    fig.tight_layout()
-
-    return fig, axs
-
-
-def pcut_dmft(results, var_label, title='', label='', figure=None):
-
-    if figure is None:
-
-        fig = plt.figure(figsize=(12, 5))
-        axs = [None]*3
-
-        axs[0] = fig.add_subplot(1, 2, 1)
-        axs[0].set_xlabel(var_label)
-        axs[0].set_ylabel('$Z$')
-        axs[0].set_title('Quasi-particle weight')
-        axs[0].grid()
-
-        axs[1] = fig.add_subplot(2, 2, 2)
-        axs[1].set_xlabel(var_label)
-        axs[1].set_ylabel(r'$\gamma$')
-        axs[1].set_title('Quasi-particle scattering rate')
-        axs[1].grid()
-
-        axs[2] = fig.add_subplot(2, 2, 4)
-        axs[2].set_xlabel(var_label)
-        axs[2].set_ylabel(r'$\tau$')
-        axs[2].set_title('Quasi-particle lifetime')
-        axs[2].grid()
-
-    else:
-
-        fig, axs = figure
-
-    num_plots = len(axs[0].lines)
-    color = color_list[num_plots % len(color_list)]
-    
-    sorted_keys = sorted((key for key in results if key != 'inputs'), key=lambda k: dict(k)[var_label])
-    var = [dict(key)[var_label] for key in sorted_keys]
-
-    Z_list = []
-    gamma_list = []
-    tau_list = []
-    for par_key in sorted_keys:
-        
-        Z, gamma, tau = get_Z(results[par_key]['S_iw'], 1/dict(par_key)['T'], results['inputs']['n_iw'])
-        Z_list.append(Z)
-        gamma_list.append(gamma)
-        tau_list.append(tau)
-
-    axs[0].plot(var, Z_list, 'o--', markersize=4, color=color, label=label)
-    axs[1].plot(var, gamma_list, 'o--', markersize=4, color=color, label=label)
-    axs[2].plot(var, tau_list, 'o--', markersize=4, color=color, label=label)
-    for ax in axs:
-        ax.legend()
-
-    fig.suptitle(f'Observables - {title}')
-    fig.tight_layout()
-
-    return fig, axs
-
-def pcut_chi(results, var_label, plot_Q=(1,1,1), fit=False, x_exp=(1,1),
-             title='', label='', figure=None, alpha=1., color=None, styles=('o-','o-')):
-
-    has_xi = results['get_xi']
-    if not isinstance(x_exp, tuple):
-        x_exp = (x_exp,)
-
-    if figure is None:
-        dim = len(results['Q'][0])
-        n_Q = sum(plot_Q)
-        fig = plt.figure(figsize=(12, 6))
-
-        outer_gs = gridspec.GridSpec(1, 2, figure=fig, width_ratios=[2, 1])
-
-        # --- Left panel: chi (and optionally xi) as nested subplots ---
-        n_left = 2 if has_xi else 1
-        left_gs = gridspec.GridSpecFromSubplotSpec(1, n_left, subplot_spec=outer_gs[0], wspace=0.43)
-
-        ax_chi = fig.add_subplot(left_gs[0])
-
-        if x_exp[0] == 1:
-            x_label = var_label
-        elif x_exp[0] == 0.5:
-            x_label = rf'$\sqrt{{{var_label}}}$'
-        else:
-            x_label = rf'${var_label}^{{{x_exp[0]:.3g}}}$'
-
-        ax_chi.set_xlabel(x_label)
-        ax_chi.set_ylabel(r'$\chi^{-1}_m(\mathbf{Q})$')
-        ax_chi.set_title('Susceptibility')
-        ax_chi.grid()
-
-        ax_xi = None
-        if has_xi:
-
-            if x_exp[1] == 1:
-                x_label = var_label
-            elif x_exp[1] == 0.5:
-                x_label = rf'$\sqrt{{{var_label}}}$'
-            else:
-                x_label = rf'${var_label}^{{{x_exp[1]:.3g}}}$'
-
-            ax_xi = fig.add_subplot(left_gs[1])
-            ax_xi.set_title('Correlation length')
-            ax_xi.set_xlabel(x_label)
-            ax_xi.set_ylabel(r'$\xi^{-1}_m$')
-            ax_xi.grid()
-
-        # --- Right panel: Q components as nested subplots ---
-        right_gs = gridspec.GridSpecFromSubplotSpec(n_Q, 1, subplot_spec=outer_gs[1], hspace=0.1)
-
-        Q_label = [r'$Q_x/\pi-1$', r'$Q_y/\pi-1$', r'$Q_z/\pi-1$']
-        ax_Q = []
-        i = 0
         for d in range(dim):
-            if plot_Q[d] == 1:
-                ax = fig.add_subplot(right_gs[i])
-                ax.set_ylabel(Q_label[d])
-                ax.grid()
-                ax_Q.append(ax)
-                i += 1
-        ax_Q[-1].set_xlabel(var_label)
-        if len(ax_Q) > 1:
-            for ax in ax_Q[:-1]:
-                ax.tick_params(axis='x', labelbottom=False)
+            ax = right_axes[row]
+            row += 1
 
-        if ax_Q:
-            ax_Q[0].set_title(r'$\mathbf{Q}$ vector')
+            ax.set_ylabel(Q_label[d])
+            ax.grid()
 
-        axs = [ax_chi, ax_xi] + ax_Q
+            for i, n in enumerate(data['n']):
+                ax.plot(T, data['Q'][i, :, d],
+                        'o-', markersize=4,
+                        color=color_list[i])
 
-    else:
-        fig, axs = figure
-        ax_chi = axs[0]
-        ax_xi  = axs[1]
+        right_axes[0].set_title(r'$\overline{\mathbf{q}}$ vector')
+        right_axes[-1].set_xlabel('T')
 
-    # Data arrays
-    var_arr = np.array([par[var_label] for par in results['par_list']])
-    Q = np.array(list(zip(*results['Q'])))
-    invchi = np.array(results['invchi'])
+    for ax in right_axes[:-1]:
+        ax.tick_params(axis='x', labelbottom=False)
 
-    if color is None:
-        used_colors = {line.get_color() for line in axs[0].lines}
-        color = next(c for c in color_list if c not in used_colors)
+    if origin:
+        for ax in [ax_chi, ax_xi] + [right_axes[0]] if right == "OZ" else []:
+            ax.set_ylim(bottom=0.)
+            ax.set_xlim(left=0.)
 
-    fit_par_chi = None
-    if fit:
-        pos_idx = np.where(invchi > 0)
-        if len(pos_idx[0]) > 2:
-            fit_par_chi = np.polyfit(var_arr[pos_idx][:15]**x_exp[0], invchi[pos_idx][:15], 1)
-            x0 = var_arr[pos_idx][0]**x_exp[0]
-            ax_chi.axline((x0, x0*fit_par_chi[0] + fit_par_chi[1]), slope=fit_par_chi[0], linestyle='--', color='black', linewidth=0.9, alpha=alpha)
-        else:
-            fit_par_chi = [np.nan]*2
-
-    # Plot chi
-    ax_chi.plot(var_arr**x_exp[0], invchi, styles[0], markersize=4, color=color, label=label, alpha=alpha)
-
-    # Plot xi if available
-    fit_par_xi = None
-    if has_xi:
-        invxi = np.array(results['invxi'])
-
-        if fit:
-            pos_idx = np.where(invxi > 0)
-            if len(pos_idx[0]) > 2:
-                x_step = var_arr[pos_idx][1] - var_arr[pos_idx][0]
-                x_fit = np.linspace(0., var_arr[pos_idx][-1] + x_step, 1000)
-
-                #fit_xi = lambda x, a, Xc: np.sqrt(abs(HMM(x, a, x_exp[0]/x_exp[1], Xc) * x**(2-x_exp[0]/x_exp[1]))) * np.sign(HMM(x, a, x_exp[0]/x_exp[1], Xc) * x**(2-x_exp[0]/x_exp[1]))
-
-                fit_xi = lambda x, a, Xc, b, c: np.sqrt(abs(HMM(x, a, x_exp[0]/x_exp[1], Xc) * abs(HMM(x, b, 1.5/x_exp[1], c)))) * np.sign(HMM(x, a, x_exp[0]/x_exp[1], Xc) * HMM(x, b, 1.5/x_exp[1], c))
-                try:
-                    fit_par_xi, _ = curve_fit(fit_xi, var_arr[pos_idx][:15]**x_exp[1], invxi[pos_idx][:15], p0=[1., 0.9*x_fit[0], 6., 0.05])
-                    ax_xi.plot(x_fit**x_exp[1], fit_xi(x_fit**x_exp[1], *fit_par_xi), linestyle='--', color='black', linewidth=0.9, alpha=alpha)
-                except RuntimeError:
-                    fit_par_xi = [np.nan]*4
-        else:
-            fit_par_xi = [np.nan]*4
-            
-        ax_xi.plot(var_arr**x_exp[1], invxi, styles[0], markersize=4, color=color, alpha=alpha)
-
-    # Plot Q components
-    dim = len(results['Q'][0])
-    i = 0
-    for d in range(dim):
-        if plot_Q[d] == 1:
-            i += 1
-            axs[i+1].plot(var_arr, Q[d]-1, styles[1], markersize=4, color=color, alpha=alpha)
-
-    if label != '':
-        ax_chi.legend()
-    
-    #if has_xi:
-    #    chi_xlim = tuple(np.sign(x)*abs(x)**x_exp[1] for x in axs[-1].get_xlim())
-    #    ax_xi.set_xlim(chi_xlim)
-
-    fig.suptitle(title)
     fig.tight_layout()
-
-    return (fig, axs), (fit_par_chi, fit_par_xi)
+    return fig
 
 def plot_diagram(points, z, z_label='Values', level=None, level_label=None,
                  point_label=('',''), title='', label='', figure=None,

@@ -1,14 +1,14 @@
 import numpy as np
 from h5 import HDFArchive
 import itertools
-import os
 from joblib import Parallel, delayed
 from threadpoolctl import threadpool_limits
 import inspect
 
-def merge_results(results):
+def merge_results(results, force_array=None):
     merged = {}
     keys = results[0].keys()
+    force_array = set(force_array or [])
 
     for key in keys:
         values = [r[key] for r in results]
@@ -20,7 +20,7 @@ def merge_results(results):
             for v in values[1:]
         )
 
-        if same:
+        if same and key not in force_array:
             merged[key] = first
         else:
             try:
@@ -32,29 +32,32 @@ def merge_results(results):
 
 def serialize(obj):
 
-    # None → NaN
     if obj is None:
         return np.nan
 
-    # functions → store name (or drop)
     if inspect.isfunction(obj):
-        return obj.__name__  # OR: return None
+        return obj.__name__
 
-    # numpy scalars
     if isinstance(obj, np.generic):
         return obj.item()
 
-    # dict
-    if isinstance(obj, dict):
-        return {k: serialize(v) for k, v in obj.items()}
-
-    # list / tuple
-    if isinstance(obj, (list, tuple)):
-        return [serialize(v) for v in obj]
-
-    # custom objects
     if hasattr(obj, "to_dict"):
         return serialize(obj.to_dict())
+
+    if isinstance(obj, dict):
+        out = {}
+        for k, v in obj.items():
+            sv = serialize(v)
+
+            if isinstance(sv, dict) and not hasattr(v, "to_dict"):
+                out.update(sv)
+            else:
+                out[k] = sv
+
+        return out
+
+    if isinstance(obj, (list, tuple)):
+        return [serialize(v) for v in obj]
 
     return obj
 
@@ -200,8 +203,9 @@ def GL(x, a, b, Xc):
 def HMM(x, a, b, Xc):
     return a * (np.sign(x) * abs(x)**b - np.sign(Xc) * abs(Xc)**b)
 
-def OZ(s, a, b, invxi, eta, s_min):
-
+def OZ(s, a, b, invxi, s_min):
     x = np.pi * (s - s_min)
     return a/(x**2 + invxi**2 + b*x**3)
-    #return a/(abs(x)**(2-eta) + invxi**(2-eta) + b*x**3)
+
+def HMM_xi(x, a, b, Xc, alpha):
+    return np.sign(x) * np.sqrt(abs(x)**alpha * HMM(x, a, b, Xc))
