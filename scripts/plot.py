@@ -239,40 +239,29 @@ def plot_scaling(data, x_exp=(1, 1, 1),
     ax_chi.set_title('Susceptibility')
     ax_chi.grid()
 
+    fp_chi_all = [None] * len(data['n'])
     for i, n in enumerate(data['n']):
         pos_idx = np.where(data['invchi_min'][i] > 0)
         if fit and len(pos_idx[0]) > 2:
-            fp = np.polyfit(T[pos_idx][:15] ** x_exp[0],
+            fp_chi = np.polyfit(T[pos_idx][:15] ** x_exp[0],
                             data['invchi_min'][i][pos_idx][:15], 1)
+            fp_chi_all[i] = fp_chi
             x0 = T[pos_idx][0] ** x_exp[0]
-            ax_chi.axline((x0, x0 * fp[0] + fp[1]),
-                          slope=fp[0], linestyle='--',
+            ax_chi.axline((x0, x0 * fp_chi[0] + fp_chi[1]),
+                          slope=fp_chi[0], linestyle='--',
                           color='black', linewidth=0.9)
 
         ax_chi.plot(T ** x_exp[0], data['invchi_min'][i], 'o-',
                      markersize=4, color=color_list[i], label=f'$n = {n:.5g}$')
-
+        
     ax_chi.legend()
-
-    # --- Middle: xi ---
-    ax_xi = fig.add_subplot(outer_gs[1])
-    ax_xi.set_xlabel(x_axis_label(x_exp[1]))
-    ax_xi.set_ylabel(r'$\xi^{-1}_m(T,n)$')
-    ax_xi.set_title('Correlation length')
-    ax_xi.grid()
-
-    for i, n in enumerate(data['n']):
-        pos_idx = np.where(data['invxi_min'][i] > 0)
+    if fit and len(pos_idx[0]) > 2:
+        ax_chi.set_xlim(right=1.05*T[pos_idx][-1]**x_exp[0])
+    if origin:
+        ax_chi.set_xlim(left=0.)
+    else:
         if fit and len(pos_idx[0]) > 2:
-            fp = np.polyfit(T[pos_idx][:15] ** x_exp[1],
-                            data['invxi_min'][i][pos_idx][:15], 1)
-            x0 = T[pos_idx][0] ** x_exp[1]
-            ax_xi.axline((x0, x0 * fp[0] + fp[1]),
-                         slope=fp[0], linestyle='--',
-                         color='black', linewidth=0.9)
-
-        ax_xi.plot(T ** x_exp[1], data['invxi_min'][i], 'o-',
-                    markersize=4, color=color_list[i])
+            ax_chi.set_xlim(left=0.95*T[pos_idx][0]**x_exp[0])
 
     # --- Right: either OZ OR Q ---
     if right == "OZ":
@@ -296,19 +285,29 @@ def plot_scaling(data, x_exp=(1, 1, 1),
         ax_OZ.set_title(r'OZ weight')
         ax_OZ.grid()
 
+        fp_OZ_all = [None] * len(data['n'])
         for i, n in enumerate(data['n']):
             pos_idx = np.where(data['OZ_weight'][i] > 0)
             if fit and len(pos_idx[0]) > 2:
-                fp = np.polyfit(T[pos_idx][:15] ** x_exp[2],
+                fp_OZ = np.polyfit(T[pos_idx][:15] ** x_exp[2],
                                 data['OZ_weight'][i][pos_idx][:15], 1)
+                fp_OZ_all[i] = fp_OZ
                 x0 = T[pos_idx][0] ** x_exp[2]
-                ax_OZ.axline((x0, x0 * fp[0] + fp[1]),
-                             slope=fp[0], linestyle='--',
+                ax_OZ.axline((x0, x0 * fp_OZ[0] + fp_OZ[1]),
+                             slope=fp_OZ[0], linestyle='--',
                              color='black', linewidth=0.9)
 
             ax_OZ.plot(T ** x_exp[2], data['OZ_weight'][i],
                        'o-', markersize=4, color=color_list[i],
                        label=f'$n = {n}$')
+
+        if fit and len(pos_idx[0]) > 2:
+            ax_OZ.set_xlim(right=1.05*T[pos_idx][-1]**x_exp[2])
+        if origin:
+            ax_OZ.set_xlim(left=0.)
+        else:
+            if fit and len(pos_idx[0]) > 2:
+                ax_OZ.set_xlim(left=0.95*T[pos_idx][0]**x_exp[2])
 
     elif right == "Q":
         Q_label = [r'$\overline{q}_x/\pi$', r'$\overline{q}_y/\pi$', r'$\overline{q}_z/\pi$']
@@ -330,11 +329,38 @@ def plot_scaling(data, x_exp=(1, 1, 1),
 
     for ax in right_axes[:-1]:
         ax.tick_params(axis='x', labelbottom=False)
+    
+    # --- Middle: xi ---
+    ax_xi = fig.add_subplot(outer_gs[1])
+    ax_xi.set_xlabel(x_axis_label(x_exp[1]))
+    ax_xi.set_ylabel(r'$\xi^{-1}_m(T,n)$')
+    ax_xi.set_title('Correlation length')
+    ax_xi.grid()
 
+    for i, n in enumerate(data['n']):
+        pos_idx = np.where(data['invxi_min'][i] > 0)
+        if fit and fp_chi_all[i] is not None and fp_OZ_all[i] is not None:
+            fp_chi, fp_OZ = fp_chi_all[i], fp_OZ_all[i]
+            x_fit = np.linspace(0., 1.1 * T[pos_idx][-1], 1000)
+            chi_times_OZ = (fp_chi[0] * x_fit**x_exp[0] + fp_chi[1]) * (fp_OZ[0]  * x_fit**x_exp[2] + fp_OZ[1])
+            xi_fit = np.sqrt(np.abs(chi_times_OZ)) * np.sign(chi_times_OZ)
+            ax_xi.plot(x_fit**x_exp[1], xi_fit, linestyle='--',
+                       color='black', linewidth=0.9)
+
+        ax_xi.plot(T ** x_exp[1], data['invxi_min'][i], 'o-',
+                   markersize=4, color=color_list[i])
+    
+    if fit and len(pos_idx[0]) > 2:
+        ax_xi.set_xlim(right=1.05*T[pos_idx][-1]**x_exp[1])
+    if origin:
+        ax_xi.set_xlim(left=0.)
+    else:
+        if fit and len(pos_idx[0]) > 2:
+            ax_xi.set_xlim(left=0.95*T[pos_idx][0]**x_exp[1])
+    
     if origin:
         for ax in [ax_chi, ax_xi] + [right_axes[0]] if right == "OZ" else []:
             ax.set_ylim(bottom=0.)
-            ax.set_xlim(left=0.)
 
     fig.tight_layout()
     return fig

@@ -506,7 +506,7 @@ def density_k(e_k, S_k, mu, beta, w_k):
     return 2. * np.dot(nF_real, w_k)
 
 @njit
-def density_iwk(e_k, S_iwk, mu, beta, w_k, tail):
+def density_iwk(e_k, S_iwk, mu, beta, w_k, tail=True):
 
     Nk = e_k.shape[0]
     niw = S_iwk.shape[0]

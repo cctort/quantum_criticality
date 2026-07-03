@@ -206,6 +206,3 @@ def HMM(x, a, b, Xc):
 def OZ(s, a, b, invxi, s_min):
     x = np.pi * (s - s_min)
     return a/(x**2 + invxi**2 + b*x**3)
-
-def HMM_xi(x, a, b, Xc, alpha):
-    return np.sign(x) * np.sqrt(abs(x)**alpha * HMM(x, a, b, Xc))

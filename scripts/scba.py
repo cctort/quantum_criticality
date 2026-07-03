@@ -86,12 +86,13 @@ class SCBA:
     disorder='nn'/'nnn': S_iwk has shape (niw, Nk_ibz) — full IBZ grid.
     """
 
-    def __init__(self, lat, niw, nk, disorder='nnn'):
+    def __init__(self, lat, bz, niw, disorder='nnn'):
         self.lat      = lat
+        self.bz = bz
         self.niw      = niw
-        self.nk       = nk
-        self.Nk       = nk ** lat.dim
-        self.Nk_ibz   = len(lat.w_k)
+        self.nk       = bz.nk
+        self.Nk       = bz.nk ** lat.dim
+        self.Nk_ibz   = len(bz.w_k)
         self._disorder = disorder
 
         self._init_disorder(disorder)
@@ -119,7 +120,7 @@ class SCBA:
         as read-only memory-mapped buffers, which would cause
         'assignment destination is read-only' inside run().
         """
-        return (self.__class__, (self.lat, self.niw, self.nk, self._disorder))
+        return (self.__class__, (self.lat, self.bz, self.niw, self._disorder))
 
     def __call__(self, **kwargs):
         """Allow the instance to be passed directly as a joblib worker."""
@@ -184,7 +185,7 @@ class SCBA:
         # Weighted by multiplicities and conjugated once here so the hot loop
         # only needs a single np.dot per frequency.
         # (Built for all disorder types; unused for onsite in the hot loop.)
-        phase = (np.exp(1j * (self.lat.k_vecs @ self._v2_R_vecs.T))
+        phase = (np.exp(1j * (self.bz.k_vecs @ self._v2_R_vecs.T))
                  * self._v2_vals[None, :])
         self._weighted_phase_conj = np.ascontiguousarray(phase.conj())
 
@@ -347,8 +348,8 @@ class SCBA:
 
         converged = False
         for step in range(max_iter):
-            mu = get_mu(self.lat.e_k, n_goal, beta, self.niw,
-                        self.S_iwk, self.lat.w_k)
+            mu = get_mu(self.bz.e_k, n_goal, beta, self.niw,
+                        self.S_iwk, self.bz.w_k)
 
             for n in range(self.niw):
                 iw_n = 1j * (2*n + 1) * np.pi / beta
@@ -357,7 +358,7 @@ class SCBA:
                 # [PERF-4] np.subtract avoids the temporary created by -e_k.
                 # [FIX-2]  S_iwk[n] has shape (1,) for onsite, (Nk_ibz,) for
                 #          nn/nnn; the subtraction broadcasts correctly either way.
-                np.subtract(iw_n + mu, self.lat.e_k, out=G_k_ibz)
+                np.subtract(iw_n + mu, self.bz.e_k, out=G_k_ibz)
                 G_k_ibz -= self.S_iwk[n]
                 np.reciprocal(G_k_ibz, out=G_k_ibz)
 
@@ -366,11 +367,11 @@ class SCBA:
                     # IBZ weights w_k satisfy Σ_k w_k f(k) = (1/Nk) Σ_{BZ} f(k),
                     # so the weighted dot-product gives G(R=0) exactly without
                     # unfolding or FFT — onsite is therefore cheaper per step.
-                    S_new[n, 0] = v2 * np.dot(self.lat.w_k, G_k_ibz)
+                    S_new[n, 0] = v2 * np.dot(self.bz.w_k, G_k_ibz)
                 else:
                     # Unfold IBZ → full BZ into pre-allocated G_k.
                     if ibz:
-                        np.take(G_k_ibz, self.lat.ibz_pos, out=G_k)
+                        np.take(G_k_ibz, self.bz.ibz_pos, out=G_k)
                     else:
                         np.copyto(G_k, G_k_ibz)
 
@@ -396,8 +397,8 @@ class SCBA:
             else:
                 np.copyto(self.S_iwk, S_new)
 
-            n_el = density_iwk(self.lat.e_k, self.S_iwk, mu, beta,
-                               self.lat.w_k)
+            n_el = density_iwk(self.bz.e_k, self.S_iwk, mu, beta,
+                               self.bz.w_k)
 
             self.run_stats['diff'].append(diff)
             self.run_stats['mix'].append(mix)
@@ -492,7 +493,7 @@ class SCBA:
 
         for n in range(self.niw):
             # Unfold IBZ → full BZ, then k → R via IFFT.
-            S_k_full  = self.S_iwk[n][self.lat.ibz_pos]               # (Nk,)
+            S_k_full  = self.S_iwk[n][self.bz.ibz_pos]               # (Nk,)
             S_R       = np.fft.ifftn(S_k_full.reshape([nk]*dim)).ravel()
             # Average Re Σ̃ over the NNN shell.
             tprime_n[n] = -float(S_R[nnn_idx].real.mean())
