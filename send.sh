@@ -3,12 +3,21 @@
 #SBATCH --partition=bilbao
 #SBATCH --nodes=1
 #SBATCH --ntasks=5
-#SBATCH --mem=110G
+#SBATCH --cpus-per-task=6
+#SBATCH --mem=300G
 #SBATCH --time=6:00:00
 #SBATCH --output=log/rpa_%j.out
 
 eval "$(/home/carlo/tools/bin/micromamba shell hook --shell bash)"
 micromamba activate triqs_env
 
+export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
+export MKL_NUM_THREADS=$SLURM_CPUS_PER_TASK
+export OPENBLAS_NUM_THREADS=$SLURM_CPUS_PER_TASK
+export NUMBA_NUM_THREADS=$SLURM_CPUS_PER_TASK
+export NUMBA_THREADING_LAYER=omp
+
 export PMIX_MCA_psec=native
+
 srun --mpi=pmix python mpi_scaling.py
+#py-spy record --native -o profile_native.svg --rate 20 --subprocesses -- python mpi_scaling.py

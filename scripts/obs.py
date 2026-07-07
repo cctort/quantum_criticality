@@ -1,12 +1,15 @@
 import numpy as np
+import scipy.fft as spfft
 from triqs.gf import GfImFreq, GfReFreq, MeshReFreq
 from scipy.optimize import brentq, minimize, curve_fit
 from scripts.utils import *
 from scripts.lattice import *
 import time
-from numba import njit
+from numba import njit, prange
 import sys
 from scipy.special import zeta
+import os
+cpw = int(os.environ.get("SLURM_CPUS_PER_TASK", 1))
 
 def get_A_iw0k(G_iwk, n_pade=60):
 
@@ -78,50 +81,49 @@ def dFermi(z_k):
         dnF_k = -np.exp(z_k) / (np.exp(z_k) + 1.)**2
     return dnF_k
 
-@njit
+@njit(parallel=True)
 def lindhard_ksp(mu, beta, e_k, e_kq, de_kq_dq=None):
-    
-    Nk = len(e_k)
-    if de_kq_dq is not None:
-        dim = de_kq_dq.shape[0]
-        dchi0 = np.zeros(dim)
 
-    chi0 = 0.
-    for k in range(Nk):
+    Nk = len(e_k)
+    if de_kq_dq is None:
+        dim = 0
+    else:
+        dim = de_kq_dq.shape[0]
+
+    chi0_k = np.zeros(Nk)
+    dchi0_k = np.zeros((Nk, dim))
+    for k in prange(Nk):
 
         e_k_eff = e_k[k]
         e_kq_eff = e_kq[k]
 
-        xk = beta * (e_k_eff - mu)
+        xk  = beta * (e_k_eff - mu)
         xkq = beta * (e_kq_eff - mu)
 
-        nF_k = Fermi(xk)
+        nF_k  = Fermi(xk)
         nF_kq = Fermi(xkq)
 
         de = e_k_eff - e_kq_eff
 
-        if abs(de) < 1e-8:
-            chi0_k = beta * nF_k * (1.0 - nF_k)
+        if abs(de) < 1e-12:
+            chi0_k[k] = beta * nF_k * (1.0 - nF_k)
         else:
-            chi0_k = -(nF_k - nF_kq) / de
-        
-        chi0 += chi0_k
-        
-        if de_kq_dq is not None and abs(de) > 1e-8:
+            chi0_k[k] = -(nF_k - nF_kq) / de
+
+        if dim > 0 and de_kq_dq is not None and abs(de) > 1e-12:
             dnF_kq = dFermi(xkq)
+
             for d in range(dim):
                 v = de_kq_dq[d, k]
                 num = (dnF_kq * beta * v) * de - (nF_k - nF_kq) * v
-                dchi0[d] += num / de**2
+                dchi0_k[k, d] = num / (de * de)
 
-    if de_kq_dq is None:
-        dchi0 = None
-    else:
-        dchi0 /= Nk
-    
-    return chi0/Nk, dchi0
+    chi0 = np.sum(chi0_k) / Nk
+    dchi0 = np.sum(dchi0_k, axis=0) / Nk
 
-@njit
+    return chi0, dchi0
+
+@njit(parallel=True)
 def matsubara_ksp(mu, beta, e_k, e_kq, S_iwk, S_iwkq):
     
     Nk = len(e_k)
@@ -139,58 +141,92 @@ def matsubara_ksp(mu, beta, e_k, e_kq, S_iwk, S_iwkq):
 
     return -2.0 * chi0.real / beta
 
+_neg_flat_cache = {}
+
+def _get_neg_flat(nk, dim):
+    key = (nk, dim)
+    if key not in _neg_flat_cache:
+        neg = np.r_[0, np.arange(nk-1, 0, -1)]
+        idx = np.arange(nk**dim).reshape((nk,)*dim)
+        neg_idx_full = idx[neg] if dim == 1 else idx[np.ix_(*([neg]*dim))]
+        _neg_flat_cache[key] = neg_idx_full.reshape(-1).astype(np.int64)
+    return _neg_flat_cache[key]
+
+@njit(parallel=True, cache=True)
+def _unfold_one(f_iw_ibz, ibz_pos, out):
+    n_full = ibz_pos.shape[0]
+    for j in prange(n_full):
+        out[j] = f_iw_ibz[ibz_pos[j]]
+
+@njit(parallel=True, cache=True)
+def _accumulate_chi0_one(G_r_flat, neg_flat, chi0_r_flat):
+    N = G_r_flat.shape[0]
+    for j in prange(N):
+        chi0_r_flat[j] += (G_r_flat[j] * G_r_flat[neg_flat[j]]).real
+
 def matsubara_rsp(bz, beta, G_iwk):
 
     dim = bz.dim
     nk = bz.nk
     niw = G_iwk.shape[0]
+    N = nk**dim
 
-    G_iwk 
+    neg_flat = _get_neg_flat(nk, dim)
+    chi0_r_flat = np.zeros(N, dtype=np.float64)
 
-    G_r = np.empty((nk,)*dim, dtype=np.complex128)
-    chi0_r = np.zeros((nk,)*dim, dtype=np.float64)
-    neg = np.r_[0, np.arange(nk-1, 0, -1)]
+    if bz.ibz:
+        ibz_pos = bz.ibz_pos
+
+    G_k = np.empty(N, dtype=np.complex128)
 
     for n in range(niw):
         if bz.ibz:
-            G_k = bz.unfold_f_k(G_iwk[n]).reshape((nk,)*dim)
+            _unfold_one(G_iwk[n], ibz_pos, G_k)
         else:
-            G_k = G_iwk[n].reshape((nk,)*dim)
-        np.fft.ifftn(G_k, out=G_r)
-        chi0_r += (G_r * G_r[neg]).real
+            G_k = G_iwk[n]
+        G_k_shaped = G_k.reshape((nk,)*dim)
 
-    chi0_q  = -2.0 / beta * np.fft.fftn(chi0_r).real
+        G_r = spfft.ifftn(G_k_shaped, workers=cpw)
+        G_r_flat = np.ascontiguousarray(G_r.reshape(N))
 
+        _accumulate_chi0_one(G_r_flat, neg_flat, chi0_r_flat)
+
+    chi0_r = chi0_r_flat.reshape((nk,)*dim)
+    chi0_q = -2.0 / beta * spfft.fftn(chi0_r, workers=cpw).real
     return chi0_q.reshape(-1)
 
-@njit
+@njit(parallel=True)
 def get_G_iwk(mu, beta, e_k, S_iwk, niw):
     
     Nk = len(e_k)
-
-    len_S_k = len(S_iwk[0])
-    len_S_iw = len(S_iwk[1])
+    len_S_k = len(S_iwk[1])
+    len_S_iw = len(S_iwk[0])
 
     G_iwk = np.zeros((niw, Nk), dtype=np.complex128)
-    for n in range(niw):
-        iw_n = 1.j * (2*n + 1) * np.pi / beta
-        for k in range(Nk):
-            s_iwk = S_iwk[min(len_S_iw - 1, n), min(len_S_k - 1, k)]
+    for k in prange(Nk):
+        idx_k = k % len_S_k
+        for n in range(niw):
+            idx_n = n % len_S_iw
+            iw_n = 1.j * (2*n + 1) * np.pi / beta
+            s_iwk = S_iwk[idx_n, idx_k]
             G_iwk[n,k] = 1. / (iw_n + mu - e_k[k] - s_iwk)
     
     return G_iwk
 
-@njit
+@njit(parallel=True)
 def get_G_iw_slice(mu, beta, e_k, S_iwk, n):
     
     Nk = len(e_k)
     niw = S_iwk.shape[0]
+    len_S_k = S_iwk.shape[1]
+
+    idx_n = n % niw
+
     G = np.empty(Nk, dtype=np.complex128)
     iw_n = 1j * (2*n + 1) * np.pi / beta
-    for k in range(Nk):
-        sn = min(niw - 1, n)
-        sk = min(S_iwk.shape[1] - 1, k)
-        G[k] = 1.0 / (iw_n + mu - e_k[k] - S_iwk[sn, sk])
+    for k in prange(Nk):
+        idx_k = k % len_S_k
+        G[k] = 1.0 / (iw_n + mu - e_k[k] - S_iwk[idx_n, idx_k])
     return G
 
 # Does not yet handle (niw, Nk_fine) or (Nk_fine,) as shapes, relevant only for k_dep
@@ -505,30 +541,29 @@ def density_k(e_k, S_k, mu, beta, w_k):
 
     return 2. * np.dot(nF_real, w_k)
 
-@njit
+@njit(parallel=True)
 def density_iwk(e_k, S_iwk, mu, beta, w_k, tail=True):
 
     Nk = e_k.shape[0]
     niw = S_iwk.shape[0]
     len_Sk = S_iwk.shape[1]
 
-    if w_k is None:
-        w_k = np.ones(Nk)/Nk
+    iwn_arr = 1j * (2*np.arange(niw) + 1) * np.pi / beta
 
-    n_tot = 0.0
-    for k in range(Nk):
+    nk_arr = np.zeros(Nk)
+    for k in prange(Nk):
+        idx_k = k % len_Sk
+
         xi = e_k[k] - mu
-        Sigma_inf = S_iwk[-1, min(len_Sk - 1, k)].real
+        Sigma_inf = S_iwk[-1, idx_k].real
         c2 = xi + Sigma_inf
 
         s = 0.0 + 0.0j
         for n in range(niw):
-
-            wn = (2*n + 1) * np.pi / beta
-            iwn = 1j * wn
-            Sigma = S_iwk[n, min(len_Sk - 1, k)]
+            iwn = iwn_arr[n]
+            Sigma = S_iwk[n, idx_k]
             G = 1.0 / (iwn - xi - Sigma)
-            if tail is True:
+            if tail:
                 G_tail = 1.0/iwn + c2/(iwn*iwn)
                 s += (G - G_tail)
             else:
@@ -538,10 +573,9 @@ def density_iwk(e_k, S_iwk, mu, beta, w_k, tail=True):
         n_analytic = 0.5
         if tail:
             n_analytic -= (beta * c2) / 4.0
-        nk = n_analytic + s.real
-        n_tot += w_k[k] * nk
+        nk_arr[k] = n_analytic + s.real
 
-    return 2.0 * n_tot
+    return 2.0 * np.sum(nk_arr * w_k)
 
 def density_iwk_extr(e_k, S_iwk, mu, beta, w_k):
 
@@ -557,7 +591,7 @@ def get_mu(e_k, n_goal, beta, niw=1, S_val=None, w_k=None, niw_extr=False):
     S_iwk, _ = get_iwk_arr(S_val, Nk=Nk, niw=niw)
 
     if w_k is None:
-        w_k = np.ones(Nk)/Nk
+        w_k = np.ones(Nk) / Nk
 
     if niw > 1 and S_val is not None:
         if niw_extr:

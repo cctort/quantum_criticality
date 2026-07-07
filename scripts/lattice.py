@@ -1,4 +1,5 @@
 import numpy as np
+import scipy.fft as spfft
 from triqs.gf import *
 from triqs.plot.mpl_interface import *
 from triqs_tprf.tight_binding import TBLattice
@@ -7,6 +8,8 @@ import spglib
 import numpy as np
 from mpi4py import MPI
 import gc
+import os
+cpw = int(os.environ.get("SLURM_CPUS_PER_TASK", 1))
 
 class LATTICE:
 
@@ -113,7 +116,7 @@ class BZ:
 def get_f_R(f_k, nk, dim):
 
     f_k_grid = f_k.reshape((nk,) * dim)
-    f_R = np.fft.fftn(f_k_grid) / nk**dim
+    f_R = spfft.fftn(f_k_grid, workers=cpw) / nk**dim
 
     return f_R
 
@@ -121,7 +124,7 @@ def get_f_iwR(f_iwk, nk, dim):
 
     niw = f_iwk.shape[0]
     f_iwk_grid = f_iwk.reshape((niw,) + (nk,) * dim)
-    f_iwR = np.fft.fftn(f_iwk_grid, axes=range(1, dim + 1)) / nk**dim
+    f_iwR = spfft.fftn(f_iwk_grid, axes=range(1, dim + 1), workers=cpw) / nk**dim
 
     return f_iwR
 
@@ -146,14 +149,14 @@ def get_f_iwkq(f_iwk, q, nk, method='roll', f_iwR=None):
             shape[alpha] = nk
             phase_grid *= np.exp(1j * np.pi * q[alpha] * grid_1d.reshape(shape))
 
-        f_iwkq = np.fft.ifftn(f_iwR * phase_grid[None, ...], axes=range(1, dim + 1)).reshape(f_iwk.shape) * Nk
+        f_iwkq = spfft.ifftn(f_iwR * phase_grid[None, ...], axes=range(1, dim + 1), workers=cpw).reshape(f_iwk.shape) * Nk
 
         df_iwkq_dq = np.zeros((dim,) + f_iwk.shape)   # (dim, niw, nk^dim)
         for alpha in range(dim):
             shape = [1] * dim
             shape[alpha] = nk
             d_phase_grid = (1j * np.pi * grid_1d.reshape(shape)) * phase_grid
-            df_iwkq_dq[alpha] = np.fft.ifftn(f_iwR * d_phase_grid[None, ...], axes=range(1, dim + 1)).reshape(f_iwk.shape) * Nk
+            df_iwkq_dq[alpha] = spfft.ifftn(f_iwR * d_phase_grid[None, ...], axes=range(1, dim + 1), workers=cpw).reshape(f_iwk.shape) * Nk
 
         return f_iwkq, df_iwkq_dq
 
@@ -181,7 +184,7 @@ def get_e_kq(e_k, q, nk, method='roll', R_vecs=None, t_vals=None, k_full=None):
         for tq, R in zip(t_phase_q, R_vecs):
             R_grid[tuple(int(r) % nk for r in R)] += tq
 
-        e_kq = np.fft.ifftn(R_grid).real.ravel() * Nk
+        e_kq = spfft.ifftn(R_grid, workers=cpw).real.ravel() * Nk
 
     return e_kq
 
@@ -206,7 +209,7 @@ def get_de_kq_dq(e_k, q, nk, R_vecs, t_vals, method='fft', k_full=None):
             for tq, idx in zip(1j * np.pi * R_vecs[:, d] * t_phase_q, R_idx):
                 dR_grid[tuple(idx)] += tq
 
-            de_kq_dq[d] = np.fft.ifftn(dR_grid).real.ravel() * Nk
+            de_kq_dq[d] = spfft.ifftn(dR_grid, workers=cpw).real.ravel() * Nk
 
     else:
 
