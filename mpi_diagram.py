@@ -5,25 +5,53 @@ from scripts.utils import merge_results
 from h5 import HDFArchive
 from mpi4py import MPI
 import time, resource
+import os
 
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
 size = comm.Get_size()
 
-tp=0.
+Gamma = 0.
+tp = 0.15
 lat = LATTICE(tp=tp)
-bz = share_bz(lat, nk=300, comm=comm)
-#bz_fine = share_bz(lat, nk=600, comm=comm)
-bz_fine = None
+bz = share_bz(lat, nk=200, comm=comm)
+bz_fine = share_bz(lat, nk=400, comm=comm)
+#bz_fine = None
 
-n_list = np.linspace(0.73, 0.91, 24)
-T_list = np.linspace(0., 0.06, 20)
+coarse = np.linspace(0.73, 1., 24)
+#fine = np.linspace(0.88, 0.90, 10)
+fine = np.linspace(0.89, 0.894, 8)
+
+coarse = coarse[(coarse < fine[0]) | (coarse > fine[-1])]
+
+n_list = np.sort(np.concatenate([coarse, fine]))
+T_list = np.linspace(0., 0.1, 10)
 U = 3
 
-file_name = f'tp{tp:.5g}U{U:.5g}.h5'
+file_name = f'G{Gamma:.5g}tp{tp:.5g}U{U:.5g}.h5'
 
+if os.path.exists(f'data/diagram/{file_name}'):
+    with HDFArchive(f'data/diagram/{file_name}', "r") as ar:
+        if ar['fit'] is True:
+            old_n = ar['n']
 
-par_list = [[{'U': U, 'n': n, 'T': T} for T in T_list] for n in n_list]
+            Tc = - abs(ar['c']/ar['a'])**(1/ar['b']) * np.sign(ar['c']/ar['a'])
+
+            # Fill NaNs by linear interpolation
+            mask = np.isnan(Tc)
+            Tc[mask] = np.interp(
+                np.flatnonzero(mask),
+                np.flatnonzero(~mask),
+                Tc[~mask]
+            )
+
+            old_Tc = np.interp(n_list, ar['n'], Tc)
+        else:
+            old_Tc = np.zeros(len(n_list))
+else:
+    old_Tc = np.zeros(len(n_list))
+
+par_list = [[{'U': U, 'n': n_list[i], 'T': T + max(old_Tc[i], 0.01)} for T in T_list] for i in range(len(n_list))]
 
 my_jobs = par_list[rank::size]
 t0 = time.time()
@@ -32,8 +60,8 @@ print(f"rank {rank} got {len(my_jobs)} jobs")
 
 results_list = []
 for pars in my_jobs:
-    #results_list.append(sweep_rpa(pars, lat, bz, bz_fine, q_path=([1,1,0.5],[1,1,1]), method='local', #fit_grid_pts=False, verbose=False, xi_range=[0,0,5e-4]))
-    results_list.append(sweep_rpa(pars, lat, bz, bz_fine, niw=512, method='fft', S_list=-1j*0.025, verbose=False, xi_range=[0,0,2e-2]))
+    results_list.append(sweep_rpa(pars, lat, bz, bz_fine, q_path=([1,1,0.5],[1,1,1]), method='local', fit_grid_pts=False, verbose=False, xi_range=[0,0,1e-3], fit=True))
+    #results_list.append(sweep_rpa(pars, lat, bz, bz_fine, niw=512, method='fft', S_list=-1j*0.025, verbose=False, xi_range=[0,0,2e-2]))
 
 t1 = time.time()
 peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
@@ -48,6 +76,6 @@ if rank == 0:
     flattened.sort(key=lambda d: d['n'])
     merged = merge_results(flattened)
 
-    with HDFArchive(f'data/scaling/{file_name}', "w") as ar:
+    with HDFArchive(f'data/diagram/{file_name}', "w") as ar:
         for key, value in merged.items():
             ar[key] = value

@@ -64,7 +64,7 @@ class LATTICE:
 
 class BZ:
     
-    def __init__(self, lat, nk, ibz=True, store_R_grid=True, store_full_bz=False):
+    def __init__(self, lat, nk, ibz=True, store_full_bz=False):
         
         self.nk = nk
         self.dim = lat.dim
@@ -116,7 +116,7 @@ class BZ:
 def get_f_R(f_k, nk, dim):
 
     f_k_grid = f_k.reshape((nk,) * dim)
-    f_R = spfft.fftn(f_k_grid, workers=cpw) / nk**dim
+    f_R = spfft.fftn(f_k_grid, workers=cpw, overwrite_x=True) / nk**dim
 
     return f_R
 
@@ -124,7 +124,7 @@ def get_f_iwR(f_iwk, nk, dim):
 
     niw = f_iwk.shape[0]
     f_iwk_grid = f_iwk.reshape((niw,) + (nk,) * dim)
-    f_iwR = spfft.fftn(f_iwk_grid, axes=range(1, dim + 1), workers=cpw) / nk**dim
+    f_iwR = spfft.fftn(f_iwk_grid, axes=range(1, dim + 1), workers=cpw, overwrite_x=True) / nk**dim
 
     return f_iwR
 
@@ -149,18 +149,33 @@ def get_f_iwkq(f_iwk, q, nk, method='roll', f_iwR=None):
             shape[alpha] = nk
             phase_grid *= np.exp(1j * np.pi * q[alpha] * grid_1d.reshape(shape))
 
-        f_iwkq = spfft.ifftn(f_iwR * phase_grid[None, ...], axes=range(1, dim + 1), workers=cpw).reshape(f_iwk.shape) * Nk
+        f_iwkq = spfft.ifftn(f_iwR * phase_grid[None, ...], axes=range(1, dim + 1), workers=cpw, overwrite_x=True).reshape(f_iwk.shape) * Nk
 
         df_iwkq_dq = np.zeros((dim,) + f_iwk.shape)   # (dim, niw, nk^dim)
         for alpha in range(dim):
             shape = [1] * dim
             shape[alpha] = nk
             d_phase_grid = (1j * np.pi * grid_1d.reshape(shape)) * phase_grid
-            df_iwkq_dq[alpha] = spfft.ifftn(f_iwR * d_phase_grid[None, ...], axes=range(1, dim + 1), workers=cpw).reshape(f_iwk.shape) * Nk
+            df_iwkq_dq[alpha] = spfft.ifftn(f_iwR * d_phase_grid[None, ...], axes=range(1, dim + 1), workers=cpw, overwrite_x=True).reshape(f_iwk.shape) * Nk
 
         return f_iwkq, df_iwkq_dq
 
-def get_e_kq(e_k, q, nk, method='roll', R_vecs=None, t_vals=None, k_full=None):
+_scatter_cache_r = {}
+
+def _get_scatter_idx_rfft(R_vecs, t_vals, nk, dim):
+    key = (id(R_vecs), nk, dim)
+    if key not in _scatter_cache_r:
+        nk_r = nk // 2 + 1
+        R_mod = R_vecs.astype(np.int64) % nk
+        keep = R_mod[:, -1] <= nk // 2          # one of each ±R pair
+        flat_idx = np.ravel_multi_index(
+            tuple(R_mod[keep].T[:-1]) + (R_mod[keep, -1],),
+            dims=(nk,) * (dim - 1) + (nk_r,)
+        )
+        _scatter_cache_r[key] = (flat_idx, t_vals[keep], R_vecs[keep])
+    return _scatter_cache_r[key]
+
+def get_e_kq(e_k, q, nk, method='roll', R_vecs=None, t_vals=None, k_full=None, scratch=None):
     dim = len(q)
     q = np.array(q)
     Nk = len(e_k)
@@ -176,43 +191,57 @@ def get_e_kq(e_k, q, nk, method='roll', R_vecs=None, t_vals=None, k_full=None):
         e_kq = np.sum(t_vals * phase_kq, axis=1)
 
     elif method == 'fft':
+        flat_idx, t_vals_r, R_vecs_r = _get_scatter_idx_rfft(R_vecs, t_vals, nk, dim)
 
-        phase_q = np.exp(1j * np.pi * (R_vecs @ q))
-        t_phase_q = t_vals * phase_q
+        phase_q = np.exp(1j * np.pi * (R_vecs_r @ q))
+        t_phase_q = t_vals_r * phase_q
 
-        R_grid = np.zeros((nk,) * dim, dtype=np.complex128)
-        for tq, R in zip(t_phase_q, R_vecs):
-            R_grid[tuple(int(r) % nk for r in R)] += tq
+        if scratch is not None:
+            R_grid_flat = scratch['R_grid_flat']
+            R_grid_flat.fill(0)
+            e_kq = scratch['e_kq']
+        else:
+            R_grid_flat = np.zeros((nk,) * (dim - 1) + (nk // 2 + 1,), dtype=np.complex128)
+            e_kq = np.empty(Nk, dtype=np.float64)
 
-        e_kq = spfft.ifftn(R_grid, workers=cpw).real.ravel() * Nk
+        np.add.at(R_grid_flat.reshape(-1), flat_idx, t_phase_q)
+
+        res = spfft.irfftn(R_grid_flat, s=(nk,) * dim, workers=cpw)
+        np.multiply(res.reshape(-1), Nk, out=e_kq)
 
     return e_kq
 
-def get_de_kq_dq(e_k, q, nk, R_vecs, t_vals, method='fft', k_full=None):
+
+def get_de_kq_dq(e_k, q, nk, R_vecs, t_vals, method='fft', k_full=None, scratch=None):
     dim = len(q)
     q = np.array(q)
     Nk = len(e_k)
 
-    de_kq_dq = np.zeros((dim, Nk), dtype=np.float64)
+    if scratch is not None:
+        de_kq_dq = scratch['de_kq_dq']
+    else:
+        de_kq_dq = np.zeros((dim, Nk), dtype=np.float64)
 
     if method == 'fft':
+        flat_idx, t_vals_r, R_vecs_r = _get_scatter_idx_rfft(R_vecs, t_vals, nk, dim)
 
-        phase_q = np.exp(1j * np.pi * (R_vecs @ q))
-        t_phase_q = t_vals * phase_q
+        phase_q = np.exp(1j * np.pi * (R_vecs_r @ q))
+        t_phase_q = t_vals_r * phase_q
 
-        dR_grid = np.zeros((nk,) * dim, dtype=np.complex128)
-        R_idx = R_vecs.astype(np.int64)
+        if scratch is not None:
+            grid_1d = scratch['grid_1d']
+        else:
+            grid_1d = np.empty((nk,) * (dim - 1) + (nk // 2 + 1,), dtype=np.complex128)
+
         for d in range(dim):
+            grid_1d.fill(0)
+            weighted = (1j * np.pi * R_vecs_r[:, d]) * t_phase_q
+            np.add.at(grid_1d.reshape(-1), flat_idx, weighted)
 
-            dR_grid.fill(0.0)
-
-            for tq, idx in zip(1j * np.pi * R_vecs[:, d] * t_phase_q, R_idx):
-                dR_grid[tuple(idx)] += tq
-
-            de_kq_dq[d] = spfft.ifftn(dR_grid, workers=cpw).real.ravel() * Nk
+            res = spfft.irfftn(grid_1d, s=(nk,) * dim, workers=cpw)
+            np.multiply(res.reshape(-1), Nk, out=de_kq_dq[d])
 
     else:
-
         kq = k_full + q
         phase_kq = np.exp(1j * np.pi * (kq @ R_vecs.T))
         t_phase_kq = t_vals * phase_kq

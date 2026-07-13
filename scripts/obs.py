@@ -81,17 +81,12 @@ def dFermi(z_k):
         dnF_k = -np.exp(z_k) / (np.exp(z_k) + 1.)**2
     return dnF_k
 
-@njit(parallel=True)
-def lindhard_ksp(mu, beta, e_k, e_kq, de_kq_dq=None):
+@njit(parallel=True, cache=True)
+def lindhard_ksp(mu, beta, e_k, e_kq):
 
     Nk = len(e_k)
-    if de_kq_dq is None:
-        dim = 0
-    else:
-        dim = de_kq_dq.shape[0]
 
-    chi0_k = np.zeros(Nk)
-    dchi0_k = np.zeros((Nk, dim))
+    chi0_k = 0.
     for k in prange(Nk):
 
         e_k_eff = e_k[k]
@@ -106,9 +101,40 @@ def lindhard_ksp(mu, beta, e_k, e_kq, de_kq_dq=None):
         de = e_k_eff - e_kq_eff
 
         if abs(de) < 1e-12:
-            chi0_k[k] = beta * nF_k * (1.0 - nF_k)
+            chi0_k += beta * nF_k * (1.0 - nF_k)
         else:
-            chi0_k[k] = -(nF_k - nF_kq) / de
+            chi0_k += -(nF_k - nF_kq) / de
+
+    return chi0_k / Nk
+
+@njit(parallel=True, cache=True)
+def lindhard_ksp_jac(mu, beta, e_k, e_kq, de_kq_dq=None):
+
+    Nk = len(e_k)
+    if de_kq_dq is None:
+        dim = 0
+    else:
+        dim = de_kq_dq.shape[0]
+
+    chi0_k = 0.
+    dchi0_k = np.zeros(dim, dtype=np.float64)
+    for k in prange(Nk):
+
+        e_k_eff = e_k[k]
+        e_kq_eff = e_kq[k]
+
+        xk = beta * (e_k_eff - mu)
+        xkq = beta * (e_kq_eff - mu)
+
+        nF_k = Fermi(xk)
+        nF_kq = Fermi(xkq)
+
+        de = e_k_eff - e_kq_eff
+
+        if abs(de) < 1e-12:
+            chi0_k += beta * nF_k * (1.0 - nF_k)
+        else:
+            chi0_k += -(nF_k - nF_kq) / de
 
         if dim > 0 and de_kq_dq is not None and abs(de) > 1e-12:
             dnF_kq = dFermi(xkq)
@@ -116,14 +142,11 @@ def lindhard_ksp(mu, beta, e_k, e_kq, de_kq_dq=None):
             for d in range(dim):
                 v = de_kq_dq[d, k]
                 num = (dnF_kq * beta * v) * de - (nF_k - nF_kq) * v
-                dchi0_k[k, d] = num / (de * de)
+                dchi0_k[d] += num / (de * de)
 
-    chi0 = np.sum(chi0_k) / Nk
-    dchi0 = np.sum(dchi0_k, axis=0) / Nk
+    return chi0_k / Nk, dchi0_k / Nk
 
-    return chi0, dchi0
-
-@njit(parallel=True)
+@njit(parallel=True, cache=True)
 def matsubara_ksp(mu, beta, e_k, e_kq, S_iwk, S_iwkq):
     
     Nk = len(e_k)
@@ -164,11 +187,10 @@ def _accumulate_chi0_one(G_r_flat, neg_flat, chi0_r_flat):
     for j in prange(N):
         chi0_r_flat[j] += (G_r_flat[j] * G_r_flat[neg_flat[j]]).real
 
-def matsubara_rsp(bz, beta, G_iwk):
+def matsubara_rsp(bz, beta, mu, e_k, S_iwk, niw):
 
     dim = bz.dim
     nk = bz.nk
-    niw = G_iwk.shape[0]
     N = nk**dim
 
     neg_flat = _get_neg_flat(nk, dim)
@@ -180,22 +202,24 @@ def matsubara_rsp(bz, beta, G_iwk):
     G_k = np.empty(N, dtype=np.complex128)
 
     for n in range(niw):
+        G_slice = get_G_iw_slice(mu, beta, e_k, S_iwk, n)   # only (Nk,), computed fresh each n
+
         if bz.ibz:
-            _unfold_one(G_iwk[n], ibz_pos, G_k)
+            _unfold_one(G_slice, ibz_pos, G_k)
         else:
-            G_k = G_iwk[n]
+            G_k = G_slice
         G_k_shaped = G_k.reshape((nk,)*dim)
 
-        G_r = spfft.ifftn(G_k_shaped, workers=cpw)
+        G_r = spfft.ifftn(G_k_shaped, workers=cpw, overwrite_x=True)
         G_r_flat = np.ascontiguousarray(G_r.reshape(N))
 
         _accumulate_chi0_one(G_r_flat, neg_flat, chi0_r_flat)
 
     chi0_r = chi0_r_flat.reshape((nk,)*dim)
-    chi0_q = -2.0 / beta * spfft.fftn(chi0_r, workers=cpw).real
+    chi0_q = -2.0 / beta * spfft.rfftn(chi0_r, workers=cpw, overwrite_x=True).real
     return chi0_q.reshape(-1)
 
-@njit(parallel=True)
+@njit(parallel=True, cache=True)
 def get_G_iwk(mu, beta, e_k, S_iwk, niw):
     
     Nk = len(e_k)
@@ -213,7 +237,7 @@ def get_G_iwk(mu, beta, e_k, S_iwk, niw):
     
     return G_iwk
 
-@njit(parallel=True)
+@njit(parallel=True, cache=True)
 def get_G_iw_slice(mu, beta, e_k, S_iwk, n):
     
     Nk = len(e_k)
@@ -358,7 +382,7 @@ def get_invchi0_grid(bz, mu, beta, q_path=None, method='fft', niw=1, S_val=None,
                 S_iwkq = S_iwk
 
             if niw == 1:
-                chi0, _ = lindhard_ksp(mu, beta, e_k, e_kq)
+                chi0 = lindhard_ksp(mu, beta, e_k, e_kq)
             else:
                 chi0 = matsubara_ksp(mu, beta, e_k, e_kq, S_iwk, S_iwkq)
                 chi0 += beta / (2*np.pi**2) * zeta(2, niw + 0.5)
@@ -370,11 +394,11 @@ def get_invchi0_grid(bz, mu, beta, q_path=None, method='fft', niw=1, S_val=None,
         G_iwk = np.asarray(get_G_iwk(mu, beta, e_k, S_iwk, niw))
 
         if niw_fit:
-            chi0_func = lambda niw: matsubara_rsp(bz, beta, G_iwk[:niw+1])
+            chi0_func = lambda niw: matsubara_rsp(bz, beta, mu, e_k, S_iwk, niw)
             chi0_grid = niw_extrapolate(chi0_func, niw)
         else:
             tail = beta / (2*np.pi**2) * zeta(2, niw + 0.5)
-            chi0_grid = matsubara_rsp(bz, beta, G_iwk) + tail
+            chi0_grid = matsubara_rsp(bz, beta, mu, e_k, S_iwk, niw) + tail
 
         del G_iwk
 
@@ -395,32 +419,42 @@ def search_min(lat, bz, bz_fine, mu, beta, q_min, q_path=None):
     
     dim = bz.dim
 
-    # q_grid either from q_path or from the BZ/IBZ
     if q_path is not None:
         q_grid, _ = get_grid_from_path(q_path, bz.k_vecs)
     else:
         q_grid = bz.k_vecs / np.pi
 
-    # Get new nk, e_k and S_iwk
     e_k = bz_fine.e_k
     if bz_fine.ibz:
         e_k = bz_fine.unfold_f_k(e_k)
 
-    # Evaluates e_kq/S_iwkq with the exact formulas, requires t_vals and S_iwR
+    nk = bz_fine.nk
+    Nk = len(e_k)
+
+    scratch_e = {
+        'R_grid_flat': np.empty((nk,) * (dim - 1) + (nk // 2 + 1,), dtype=np.complex128),
+        'e_kq': np.empty(Nk, dtype=np.float64),
+    }
+    scratch_de = {
+        'de_kq_dq': np.empty((dim, Nk), dtype=np.float64),
+        'grid_1d':  np.empty((nk,) * (dim - 1) + (nk // 2 + 1,), dtype=np.complex128),
+    }
+
     def invchi0_q_exact(s):
         q = start + np.dot(J, np.atleast_1d(s))
 
-        e_kq = get_e_kq(e_k, q, bz_fine.nk, method='fft', R_vecs=lat.R_vecs, t_vals=lat.t_vals, k_full=bz_fine.k_full)
-        de_kq_dq = get_de_kq_dq(e_k, q, bz_fine.nk, R_vecs=lat.R_vecs, t_vals=lat.t_vals)
+        e_kq = get_e_kq(e_k, q, nk, method='fft', R_vecs=lat.R_vecs, t_vals=lat.t_vals,
+                         k_full=bz_fine.k_full, scratch=scratch_e)
+        de_kq_dq = get_de_kq_dq(e_k, q, nk, R_vecs=lat.R_vecs, t_vals=lat.t_vals,
+                                 scratch=scratch_de)
 
-        chi0, dchi0_dq = lindhard_ksp(mu, beta, e_k, e_kq, de_kq_dq=de_kq_dq)
+        chi0, dchi0_dq = lindhard_ksp_jac(mu, beta, e_k, e_kq, de_kq_dq=de_kq_dq)
 
         dinvchi0_dq = -dchi0_dq / chi0**2
         grad_s = J.T @ dinvchi0_dq
 
         return 1/chi0, grad_s
     
-    # If needed you can increase the borders of the refinement region
     safe = 1
 
     if q_path is not None:
@@ -461,7 +495,7 @@ def search_min(lat, bz, bz_fine, mu, beta, q_min, q_path=None):
 
     return np.asarray(q_min), invchi0_min
 
-def fit_invxi(lat, bz, bz_fine, mu, beta, q_min, U=None, q_path=None, invchi_grid=None, fit_range=[0,0,7e-3], fit_pts=10, fit_grid_pts=True, fit_qmin=False):
+def fit_invxi(lat, bz, bz_fine, mu, beta, q_min, U=None, q_path=None, invchi_grid=None, fit_range=[0,0,7e-3], fit_pts=15, fit_grid_pts=True, fit_qmin=False):
 
     finer_bz = bz_fine if bz_fine is not None else bz
 
@@ -472,18 +506,23 @@ def fit_invxi(lat, bz, bz_fine, mu, beta, q_min, U=None, q_path=None, invchi_gri
     stop = q_min + fit_range
     
     if not fit_grid_pts:
-        
+    
         q_grid = np.linspace(start, stop, fit_pts)
 
         if finer_bz.ibz:
             e_k = finer_bz.unfold_f_k(e_k)
-        
-        # 1/chi0 for each q using Lindhard
+
+        scratch_e = {
+            'R_grid_flat': np.empty((nk,) * (lat.dim - 1) + (nk // 2 + 1,), dtype=np.complex128),
+            'e_kq':        np.empty(len(e_k), dtype=np.float64),
+        }
+
         chi_grid = []
         for q in q_grid:
-            e_kq = get_e_kq(e_k, q, nk, method='fft', R_vecs=lat.R_vecs, t_vals=lat.t_vals, k_full=finer_bz.k_full)
+            e_kq = get_e_kq(e_k, q, nk, method='fft', R_vecs=lat.R_vecs, t_vals=lat.t_vals,
+                            k_full=finer_bz.k_full, scratch=scratch_e)
 
-            chi0, _ = lindhard_ksp(mu, beta, e_k, e_kq)
+            chi0 = lindhard_ksp(mu, beta, e_k, e_kq)
             chi_grid.append(chi0/(1 - U*chi0))
     
     else:
@@ -541,7 +580,7 @@ def density_k(e_k, S_k, mu, beta, w_k):
 
     return 2. * np.dot(nF_real, w_k)
 
-@njit(parallel=True)
+@njit(parallel=True, cache=True)
 def density_iwk(e_k, S_iwk, mu, beta, w_k, tail=True):
 
     Nk = e_k.shape[0]
@@ -714,35 +753,34 @@ def sweep_rpa(par_list, lat, bz, bz_fine=None, niw=1, S_list=None, q_path=None, 
             varying_key = key
             varying_par = sweep_data[key]
             break
-
+    
     if fit:
 
         if not isinstance(fit_type, (list, np.ndarray)):
             fit_type = [fit_type]
-        
-        sweep_data['fitchi'] = {}
+
+        par_keys = {}
+        par_keys['invchi_min'] = ['a', 'b', 'c']
+        for label in par_keys['invchi_min']:
+            sweep_data[label] = []
+
         if get_xi:
-            sweep_data['fitxi'] = {}
-
-        par_keys = ['a', 'b', 'Xc']
-        for label in par_keys:
-            sweep_data['fitchi'][label] = []
-
-            if get_xi:
-                sweep_data['fitxi'][label] = []
+            par_keys['OZ_weight'] = ['aOZ', 'bOZ', 'cOZ']
+            for label in par_keys['OZ_weight']:
+                sweep_data[label] = []
 
         sweep_data['Qc'], sweep_data['mu_c'] = [], []
 
         for fit in fit_type:
 
-            labels_to_fit = ['chi']
+            labels_to_fit = ['invchi_min']
             if get_xi:
-                labels_to_fit.append('xi')
+                labels_to_fit.append('OZ_weight')
 
             for label in labels_to_fit:
-                pos_mask = sweep_data[f'inv{label}'] > 0
+                pos_mask = sweep_data[label] > 0
                 x_fit = np.array(varying_par)[pos_mask][:10]
-                y_fit = sweep_data[f'inv{label}'][pos_mask][:10]
+                y_fit = sweep_data[label][pos_mask][:10]
 
                 if len(x_fit) >= 2:
                     try:
@@ -750,39 +788,41 @@ def sweep_rpa(par_list, lat, bz, bz_fine=None, niw=1, S_list=None, q_path=None, 
                         bounds = ([0., 0., -np.inf], [np.inf, np.inf, np.inf])
                         par, _ = curve_fit(fit, x_fit, y_fit, p0=p0, bounds=bounds, maxfev=10000)
 
-                        for i, key in enumerate(par_keys):
-                            sweep_data[f'fit{label}'][key].append(par[i])
+                        for i, key in enumerate(par_keys[label]):
+                            sweep_data[key].append(par[i])
                         
-                        if label == 'chi':
+                        if label == 'invchi_min':
+                            Tc = - np.abs(par[2]/par[0])**(1/par[1]) * np.sign(par[2]/par[0])
+
                             Q_vals = sweep_data['Q'][pos_mask][:2]
                             m = (Q_vals[1] - Q_vals[0])/(x_fit[1] - x_fit[0])
-                            sweep_data['Qc'].append(Q_vals[0] - m * (x_fit[0] - np.maximum(0., sweep_data[f'fit{label}']['Xc'])))
+                            sweep_data['Qc'].append(Q_vals[0] - m * (x_fit[0] - np.maximum(0., Tc)))
 
                             mu_vals = sweep_data['mu'][pos_mask][:2]
                             m = (mu_vals[1] - mu_vals[0])/(x_fit[1] - x_fit[0])
-                            sweep_data['mu_c'].append(mu_vals[0] - m * (x_fit[0] - np.maximum(0., sweep_data[f'fit{label}']['Xc'])))
+                            sweep_data['mu_c'].append(mu_vals[0] - m * (x_fit[0] - np.maximum(0., Tc)))
                         
                         converged = True
 
                     except RuntimeError:
-                        print(f"Fit of inv{label} values did not converge")
+                        print(f"Fit of {label} values did not converge")
                         converged = False
                 else:
                     print("Not enough points to fit!")
                     converged = False
 
                 if not converged:
-                    for i, key in enumerate(par_keys):
-                        sweep_data[f'fit{label}'][key].append(np.nan)
+                    for i, key in enumerate(par_keys[label]):
+                        sweep_data[key].append(np.nan)
 
-                    if label == 'chi':
+                    if label == 'invchi_min':
                         sweep_data['Qc'].append(np.array([np.nan]*lat.dim))
-                        sweep_data['mu_c'].append(np.array([np.nan]))
+                        sweep_data['mu_c'].append(np.nan)
                 
         if len(fit_type) == 1:
             for label in labels_to_fit:
-                for key in par_keys:
-                    sweep_data[f'fit{label}'][key] = sweep_data[f'fit{label}'][key][0]
+                for key in par_keys[label]:
+                    sweep_data[key] = sweep_data[key][0]
 
             sweep_data['Qc'] = sweep_data['Qc'][0]
             sweep_data['mu_c'] = sweep_data['mu_c'][0]

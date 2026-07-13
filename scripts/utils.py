@@ -197,11 +197,8 @@ def run_parallel(worker, inputs, workers=-1):
         
     return results_list
 
-def GL(x, a, b, Xc):
-    return a * abs(x - Xc)**b * np.sign(x - Xc)
-
-def HMM(x, a, b, Xc):
-    return a * (np.sign(x) * abs(x)**b - np.sign(Xc) * abs(Xc)**b)
+def HMM(x, a, b, c):
+    return a * np.sign(x)*np.abs(x)**b + c
 
 def OZ(s, a, b, invxi, s_min):
     x = np.pi * (s - s_min)

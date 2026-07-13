@@ -7,7 +7,7 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import matplotlib.gridspec as gridspec
-from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes, mark_inset
 from fractions import Fraction
 #mpl.rcParams['figure.dpi']=100
 
@@ -205,8 +205,7 @@ def plot_chimin(data):
     fig.tight_layout()
     return fig
 
-def plot_scaling(data, x_exp=(1, 1, 1),
-                 fit=False, origin=True, right="OZ"):
+def plot_scaling(data, x_exp=(1,1,1), fit=False, origin=True, right="OZ"):
     
     T = data['T']
     dim = data['lat']['dim']
@@ -365,160 +364,106 @@ def plot_scaling(data, x_exp=(1, 1, 1),
     fig.tight_layout()
     return fig
 
-def plot_diagram(points, z, z_label='Values', level=None, level_label=None,
-                 point_label=('',''), title='', label='', figure=None,
-                 shape=(1,1,1), scatter=True, logscale=False, deriv_wrt=None,
-                 log_deriv=False, deriv_offset=None):
+def plot_diagram(data_list, var_list, var_plotlabel, inset_xrange=None, subplots='commens'):
 
-    row, col, pos = shape
-    fig = plt.figure(figsize=(13, 6)) if figure is None else figure
-    ax = fig.add_subplot(row, col, pos)
+    fig = plt.figure(figsize=(12, 6))
+    ax = [fig.add_subplot(1,2,1),
+          fig.add_subplot(2,2,2),
+          fig.add_subplot(2,2,4)]
+    #fig.subplots_adjust(hspace=0.15, wspace=0.03)
 
-    ax.set_xlabel(point_label[0])
-    ax.set_ylabel(point_label[1])
-    ax.set_title(label)
-    ax.grid()
+    for a in ax:
+        a.grid()
+        a.set_xlim(data_list[0]['n'][0], data_list[0]['n'][-1])
+        a.invert_xaxis()
 
-    x = np.array([p[point_label[0]] for p in points])
-    y = np.array([p[point_label[1]] for p in points])
-    z = np.array(z)
+    ax[0].set_ylabel(r'$T_N$')
 
-    ax.set_xlim(np.min(x), np.max(x))
-    ax.set_ylim(np.min(y), np.max(y))
+    if subplots == 'commens':
+        ax[1].set_ylabel(r'$Q_z(T_N)/\pi$')
+        ax[2].set_ylabel(r'$\mu(T_N)$')
+    elif subplots == 'scaling':
+        ax[1].set_ylabel(r'$\gamma$')
+        ax[2].set_ylabel(r'$\mathcal{A}(T_N)$')
 
-    xi = np.unique(x)
-    yi = np.unique(y)
-    Xi, Yi = np.meshgrid(xi, yi)
+    ax[1].tick_params(axis='x', labelbottom=False)
+    ax[0].set_xlabel(r'$n$')
+    ax[2].set_xlabel(r'$n$')
 
-    # -------------------------
-    # NO DERIVATIVE
-    # -------------------------
-    if deriv_wrt is None:
-        Zi = griddata((x, y), z, (Xi, Yi), method='linear')
-        z_scatter = z.copy()
+    # --- inset axes on ax[0] ---
+    axins = None
+    if inset_xrange is not None:
+        x1, x2 = inset_xrange
+        axins = inset_axes(
+            ax[0], width="45%", height="45%",
+            bbox_to_anchor=(0.13, 0.13, 0.85, 0.85),  # (x0, y0, width, height) in axes fraction
+            bbox_transform=ax[0].transAxes,
+            loc='upper right'
+        )
+        axins.grid()
+        axins.set_xlim(x1, x2)
+        axins.invert_xaxis()
 
-    # -------------------------
-    # DERIVATIVE
-    # -------------------------
-    else:
-        Zi = np.full_like(Xi, np.nan, dtype=float)
-        z_scatter = np.full(len(z), np.nan)
+    for i, data in enumerate(data_list):
+        n_list = data['n']
 
-        if deriv_wrt == point_label[0]:
-            for i, yi_val in enumerate(yi):
-                mask = (y == yi_val)
-                if mask.sum() > 1:
-                    x_row = x[mask]
-                    z_row = z[mask]
+        Tc = - abs(data['c']/data['a'])**(1/data['b']) * np.sign(data['c']/data['a'])
+        if subplots == 'commens':
+            y1 = data['Qc'][:,-1]
+            y2 = data['mu_c']
+        elif subplots == 'scaling':
+            y1 = data['b']
+            y2 = - abs(data['cOZ']/data['aOZ'])**(1/data['bOZ']) * np.sign(data['cOZ']/data['aOZ'])
+            ax[2].set_ylim(0,0.2)
 
-                    sort_idx = np.argsort(x_row)
-                    x_sorted = x_row[sort_idx]
-                    z_sorted = z_row[sort_idx]
+        label = rf"${var_plotlabel}={var_list[i]}$"
 
-                    dz = np.gradient(z_sorted, x_sorted)
+        ax[0].plot(n_list, Tc, 'o-', label=label, markersize=4, color=color_list[i])
+        ax[1].plot(n_list, y1, 'o-', label=label, markersize=4, color=color_list[i])
+        ax[2].plot(n_list, y2, 'o-', label=label, markersize=4, color=color_list[i])
 
-                    if log_deriv:
-                        valid = z_sorted != 0
-                        dz_log = np.full_like(dz, np.nan)
-                        dz_log[valid] = (x_sorted[valid] / z_sorted[valid]) * dz[valid]
-                        dz = dz_log
+        if axins is not None:
+            axins.plot(n_list, Tc, 'o-', markersize=4, color=color_list[i])
 
-                    for j, xv in enumerate(x_sorted):
-                        col_idx = np.where(xi == xv)[0][0]
-                        Zi[i, col_idx] = dz[j]
+        nc = np.interp(0., Tc, n_list)
+        for a in ax:
+            a.axvline(nc, linestyle='--', color=color_list[i], alpha=0.6)
+        if axins is not None:
+            axins.axvline(nc, linestyle='--', color=color_list[i], alpha=0.6)
 
-                    inv = np.empty_like(sort_idx)
-                    inv[sort_idx] = np.arange(len(sort_idx))
-                    z_scatter[mask] = dz[inv]
+    if axins is not None:
+        # auto-scale y to the data within [x1, x2], with a little padding
+        y_vals = []
+        for data in data_list:
+            n_arr = np.asarray(data['n'])
+            Tc_arr = -abs(data['c']/data['a'])**(1/data['b']) * np.sign(data['c']/data['a'])
+            lo, hi = min(x1, x2), max(x1, x2)
+            mask = (n_arr >= lo) & (n_arr <= hi)
+            if mask.any():
+                vals = Tc_arr[mask]
+                vals = vals[np.isfinite(vals)]  # drop NaN/Inf
+                if vals.size:
+                    y_vals.append(vals)
 
-        elif deriv_wrt == point_label[1]:
-
-            if deriv_offset is None:
-                Tc_list = [0.] * len(xi)
-            elif np.isscalar(deriv_offset):
-                Tc_list = [float(deriv_offset)] * len(xi)
+        if y_vals:
+            y_all = np.concatenate(y_vals)
+            ymin, ymax = np.nanmin(y_all), np.nanmax(y_all)
+            if np.isfinite(ymin) and np.isfinite(ymax):
+                if ymin == ymax:
+                    # avoid zero-height ylim if all values in range are identical
+                    pad = 0.05 * abs(ymin) if ymin != 0 else 0.05
+                else:
+                    pad = 0.05 * (ymax - ymin)
+                axins.set_ylim(ymin - pad, ymax + pad)
             else:
-                Tc_list = list(deriv_offset)
-                if len(Tc_list) != len(xi):
-                    raise ValueError("deriv_offset length mismatch")
-
-            for i, (xi_val, Tc) in enumerate(zip(xi, Tc_list)):
-                mask = (x == xi_val)
-                if mask.sum() > 1:
-                    y_col = y[mask]
-                    z_col = z[mask]
-
-                    sort_idx = np.argsort(y_col)
-                    y_sorted = y_col[sort_idx]
-                    z_sorted = z_col[sort_idx]
-
-                    dz = np.gradient(z_sorted, y_sorted)
-
-                    if log_deriv:
-                        shifted = y_sorted - Tc
-                        valid = z_sorted != 0
-                        dz_log = np.full_like(dz, np.nan)
-                        dz_log[valid] = (shifted[valid] / z_sorted[valid]) * dz[valid]
-                        dz = dz_log
-
-                    for j, yv in enumerate(y_sorted):
-                        row_idx = np.where(yi == yv)[0][0]
-                        Zi[row_idx, i] = dz[j]
-
-                    inv = np.empty_like(sort_idx)
-                    inv[sort_idx] = np.arange(len(sort_idx))
-                    z_scatter[mask] = dz[inv]
-
+                axins.set_ylim(auto=True)  # fallback, shouldn't hit after filtering
         else:
-            raise ValueError("deriv_wrt must match one of point_label")
+            axins.set_ylim(auto=True)  # no finite data in range, let mpl autoscale
 
-    # -------------------------
-    # MASK + COLOR NORMALIZATION
-    # -------------------------
-    Zi_masked = np.ma.masked_invalid(Zi)
-    vals = Zi_masked.compressed()
+        mark_inset(ax[0], axins, loc1=2, loc2=4, fc="none", ec="0.7")
 
-    if vals.size == 0:
-        norm = mcolors.Normalize(vmin=-1, vmax=1)
-    elif logscale:
-        pos_vals = vals[vals > 0]
-        norm = mcolors.LogNorm(vmin=pos_vals.min(), vmax=pos_vals.max()) if pos_vals.size > 0 else mcolors.Normalize()
-    elif np.any(vals < 0) and np.any(vals > 0):
-        vmax = np.max(np.abs(vals))
-        norm = mcolors.TwoSlopeNorm(vmin=-vmax, vcenter=0., vmax=vmax)
-    else:
-        norm = mcolors.Normalize(vmin=np.min(vals), vmax=np.max(vals))
+    ax[0].legend(loc='lower left')
+    ax[0].set_ylim(0,0.4)
 
-    # -------------------------
-    # CONTOUR PLOT
-    # -------------------------
-    contour = ax.contourf(Xi, Yi, Zi_masked, levels=20,
-                          cmap='RdYlBu_r', alpha=0.6, norm=norm)
-    cbar = fig.colorbar(contour, ax=ax)
-    cbar.set_label(z_label)
-
-    ax.contour(Xi, Yi, Zi_masked, levels=20,
-               colors='k', linewidths=0.5, alpha=0.6)
-
-    if level is not None:
-        line = ax.contour(Xi, Yi, Zi_masked,
-                          levels=[level], colors='black',
-                          linewidths=2., linestyles=':')
-        if level_label:
-            ax.clabel(line, inline=1, fontsize=10, fmt=level_label)
-
-    # -------------------------
-    # SCATTER
-    # -------------------------
-    if scatter:
-        valid = ~np.isnan(z_scatter)
-        ax.scatter(x[valid], y[valid],
-                   c=z_scatter[valid], s=30,
-                   cmap='RdYlBu_r', edgecolor='black',
-                   norm=norm, zorder=5)
-        ax.scatter(x[~valid], y[~valid],
-                   c='gray', s=30, edgecolor='black',
-                   zorder=5, alpha=0.5)
-
-    fig.suptitle(f'Phase diagram - {title}')
+    fig.tight_layout()
     return fig
