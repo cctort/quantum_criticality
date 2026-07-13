@@ -24,3 +24,4 @@ srun --mpi=pmix python mpi_scaling.py
 #srun --mpi=pmix bash -c '
 #  memray run --aggregate -f -o memray_out/profile_rank${SLURM_PROCID}.bin -- mpi_scaling.py
 #'
+#mpirun -np 5 python mpi_scaling.py

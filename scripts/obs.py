@@ -202,7 +202,7 @@ def matsubara_rsp(bz, beta, mu, e_k, S_iwk, niw):
     G_k = np.empty(N, dtype=np.complex128)
 
     for n in range(niw):
-        G_slice = get_G_iw_slice(mu, beta, e_k, S_iwk, n)   # only (Nk,), computed fresh each n
+        G_slice = get_G_iw_slice(mu, beta, e_k, S_iwk, n)
 
         if bz.ibz:
             _unfold_one(G_slice, ibz_pos, G_k)
@@ -216,7 +216,7 @@ def matsubara_rsp(bz, beta, mu, e_k, S_iwk, niw):
         _accumulate_chi0_one(G_r_flat, neg_flat, chi0_r_flat)
 
     chi0_r = chi0_r_flat.reshape((nk,)*dim)
-    chi0_q = -2.0 / beta * spfft.rfftn(chi0_r, workers=cpw, overwrite_x=True).real
+    chi0_q = -2.0 / beta * spfft.fftn(chi0_r, workers=cpw, overwrite_x=True)
     return chi0_q.reshape(-1)
 
 @njit(parallel=True, cache=True)

@@ -13,7 +13,7 @@ size = comm.Get_size()
 Gamma = 0.1
 tp = 0.
 lat = LATTICE(tp=tp)
-bz = share_bz(lat, nk=100, comm=comm)
+bz = share_bz(lat, nk=50, comm=comm)
 #bz_fine = share_bz(lat, nk=1000, comm=comm)
 bz_fine = None
 
