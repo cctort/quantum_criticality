@@ -160,22 +160,17 @@ def get_f_iwkq(f_iwk, q, nk, method='roll', f_iwR=None):
 
         return f_iwkq, df_iwkq_dq
 
-_scatter_cache_r = {}
-
 def _get_scatter_idx_rfft(R_vecs, t_vals, nk, dim):
-    key = (id(R_vecs), nk, dim)
-    if key not in _scatter_cache_r:
-        nk_r = nk // 2 + 1
-        R_mod = R_vecs.astype(np.int64) % nk
-        keep = R_mod[:, -1] <= nk // 2          # one of each ±R pair
-        flat_idx = np.ravel_multi_index(
-            tuple(R_mod[keep].T[:-1]) + (R_mod[keep, -1],),
-            dims=(nk,) * (dim - 1) + (nk_r,)
-        )
-        _scatter_cache_r[key] = (flat_idx, t_vals[keep], R_vecs[keep])
-    return _scatter_cache_r[key]
+    nk_r = nk // 2 + 1
+    R_mod = R_vecs.astype(np.int64) % nk
+    keep = R_mod[:, -1] <= nk // 2          # one of each ±R pair
+    flat_idx = np.ravel_multi_index(
+        tuple(R_mod[keep].T[:-1]) + (R_mod[keep, -1],),
+        dims=(nk,) * (dim - 1) + (nk_r,)
+    )
+    return flat_idx, t_vals[keep], R_vecs[keep]
 
-def get_e_kq(e_k, q, nk, method='roll', R_vecs=None, t_vals=None, k_full=None, scratch=None):
+def get_e_kq(e_k, q, nk, method='roll', R_vecs=None, t_vals=None, k_full=None):
     dim = len(q)
     q = np.array(q)
     Nk = len(e_k)
@@ -196,13 +191,8 @@ def get_e_kq(e_k, q, nk, method='roll', R_vecs=None, t_vals=None, k_full=None, s
         phase_q = np.exp(1j * np.pi * (R_vecs_r @ q))
         t_phase_q = t_vals_r * phase_q
 
-        if scratch is not None:
-            R_grid_flat = scratch['R_grid_flat']
-            R_grid_flat.fill(0)
-            e_kq = scratch['e_kq']
-        else:
-            R_grid_flat = np.zeros((nk,) * (dim - 1) + (nk // 2 + 1,), dtype=np.complex128)
-            e_kq = np.empty(Nk, dtype=np.float64)
+        R_grid_flat = np.zeros((nk,) * (dim - 1) + (nk // 2 + 1,), dtype=np.complex128)
+        e_kq = np.empty(Nk, dtype=np.float64)
 
         np.add.at(R_grid_flat.reshape(-1), flat_idx, t_phase_q)
 
@@ -212,15 +202,12 @@ def get_e_kq(e_k, q, nk, method='roll', R_vecs=None, t_vals=None, k_full=None, s
     return e_kq
 
 
-def get_de_kq_dq(e_k, q, nk, R_vecs, t_vals, method='fft', k_full=None, scratch=None):
+def get_de_kq_dq(e_k, q, nk, R_vecs, t_vals, method='fft', k_full=None):
     dim = len(q)
     q = np.array(q)
     Nk = len(e_k)
 
-    if scratch is not None:
-        de_kq_dq = scratch['de_kq_dq']
-    else:
-        de_kq_dq = np.zeros((dim, Nk), dtype=np.float64)
+    de_kq_dq = np.zeros((dim, Nk), dtype=np.float64)
 
     if method == 'fft':
         flat_idx, t_vals_r, R_vecs_r = _get_scatter_idx_rfft(R_vecs, t_vals, nk, dim)
@@ -228,10 +215,7 @@ def get_de_kq_dq(e_k, q, nk, R_vecs, t_vals, method='fft', k_full=None, scratch=
         phase_q = np.exp(1j * np.pi * (R_vecs_r @ q))
         t_phase_q = t_vals_r * phase_q
 
-        if scratch is not None:
-            grid_1d = scratch['grid_1d']
-        else:
-            grid_1d = np.empty((nk,) * (dim - 1) + (nk // 2 + 1,), dtype=np.complex128)
+        grid_1d = np.empty((nk,) * (dim - 1) + (nk // 2 + 1,), dtype=np.complex128)
 
         for d in range(dim):
             grid_1d.fill(0)

@@ -86,65 +86,101 @@ def lindhard_ksp(mu, beta, e_k, e_kq):
 
     Nk = len(e_k)
 
-    chi0_k = 0.
-    for k in prange(Nk):
+    block_size = 4096
+    nblocks = (Nk + block_size - 1) // block_size
 
-        e_k_eff = e_k[k]
-        e_kq_eff = e_kq[k]
+    partial = np.zeros(nblocks, dtype=np.float64)
 
-        xk  = beta * (e_k_eff - mu)
-        xkq = beta * (e_kq_eff - mu)
+    for b in prange(nblocks):
 
-        nF_k  = Fermi(xk)
-        nF_kq = Fermi(xkq)
+        start = b * block_size
+        stop = min(start + block_size, Nk)
 
-        de = e_k_eff - e_kq_eff
+        s = 0.
+        for k in range(start, stop):
 
-        if abs(de) < 1e-12:
-            chi0_k += beta * nF_k * (1.0 - nF_k)
-        else:
-            chi0_k += -(nF_k - nF_kq) / de
+            e_k_eff = e_k[k]
+            e_kq_eff = e_kq[k]
 
-    return chi0_k / Nk
+            xk  = beta * (e_k_eff - mu)
+            xkq = beta * (e_kq_eff - mu)
+
+            nF_k  = Fermi(xk)
+            nF_kq = Fermi(xkq)
+
+            de = e_k_eff - e_kq_eff
+
+            if abs(de) < 1e-12:
+                s += beta * nF_k * (1. - nF_k)
+            else:
+                s += -(nF_k - nF_kq) / de
+
+        partial[b] = s
+
+    chi0 = 0.
+    for b in range(nblocks):
+        chi0 += partial[b]
+
+    return chi0 / Nk
 
 @njit(parallel=True, cache=True)
-def lindhard_ksp_jac(mu, beta, e_k, e_kq, de_kq_dq=None):
+def lindhard_ksp_jac(mu, beta, e_k, e_kq, de_kq_dq):
 
     Nk = len(e_k)
-    if de_kq_dq is None:
-        dim = 0
-    else:
-        dim = de_kq_dq.shape[0]
+    dim = de_kq_dq.shape[0]
 
-    chi0_k = 0.
-    dchi0_k = np.zeros(dim, dtype=np.float64)
-    for k in prange(Nk):
+    block_size = 4096
+    nblocks = (Nk + block_size - 1) // block_size
 
-        e_k_eff = e_k[k]
-        e_kq_eff = e_kq[k]
+    partial_chi0 = np.zeros(nblocks, dtype=np.float64)
+    partial_dchi = np.zeros((nblocks, dim), dtype=np.float64)
 
-        xk = beta * (e_k_eff - mu)
-        xkq = beta * (e_kq_eff - mu)
+    for b in prange(nblocks):
 
-        nF_k = Fermi(xk)
-        nF_kq = Fermi(xkq)
+        start = b * block_size
+        stop = min(start + block_size, Nk)
 
-        de = e_k_eff - e_kq_eff
+        chi = 0.
+        dchi = np.zeros(dim, dtype=np.float64)
 
-        if abs(de) < 1e-12:
-            chi0_k += beta * nF_k * (1.0 - nF_k)
-        else:
-            chi0_k += -(nF_k - nF_kq) / de
+        for k in range(start, stop):
 
-        if dim > 0 and de_kq_dq is not None and abs(de) > 1e-12:
-            dnF_kq = dFermi(xkq)
+            e_k_eff = e_k[k]
+            e_kq_eff = e_kq[k]
 
-            for d in range(dim):
-                v = de_kq_dq[d, k]
-                num = (dnF_kq * beta * v) * de - (nF_k - nF_kq) * v
-                dchi0_k[d] += num / (de * de)
+            xk = beta * (e_k_eff - mu)
+            xkq = beta * (e_kq_eff - mu)
 
-    return chi0_k / Nk, dchi0_k / Nk
+            nF_k = Fermi(xk)
+            nF_kq = Fermi(xkq)
+
+            de = e_k_eff - e_kq_eff
+
+            if abs(de) < 1e-12:
+                chi += beta * nF_k * (1. - nF_k)
+                pref = -0.5 * beta**2 * nF_k * (1. - nF_k) * (1. - 2.*nF_k)
+                for d in range(dim):
+                    dchi[d] += pref * de_kq_dq[d,k]
+
+            else:
+                chi += -(nF_k - nF_kq) / de
+                dnF_kq = dFermi(xkq)
+                for d in range(dim):
+                    v = de_kq_dq[d,k]
+                    dchi[d] += (dnF_kq * beta * v * de - (nF_k - nF_kq) * v) / (de*de)
+
+        partial_chi0[b] = chi
+        for d in range(dim):
+            partial_dchi[b,d] = dchi[d]
+
+    chi0 = 0.
+    dchi0 = np.zeros(dim)
+    for b in range(nblocks):
+        chi0 += partial_chi0[b]
+        for d in range(dim):
+            dchi0[d] += partial_dchi[b,d]
+
+    return chi0 / Nk, dchi0 / Nk
 
 @njit(parallel=True, cache=True)
 def matsubara_ksp(mu, beta, e_k, e_kq, S_iwk, S_iwkq):
@@ -158,11 +194,11 @@ def matsubara_ksp(mu, beta, e_k, e_kq, S_iwk, S_iwkq):
     for n in range(niw):
         iw = 1j * (2*n + 1) * np.pi / beta
         for k in range(Nk):
-            G_iwk  = 1.0 / (iw + mu - e_k[k] - S_iwk[n, min(lenS_k - 1, k)])
-            G_iwkq = 1.0 / (iw + mu - e_kq[k] - S_iwkq[n, min(lenS_kq - 1, k)])
+            G_iwk  = 1. / (iw + mu - e_k[k] - S_iwk[n, min(lenS_k - 1, k)])
+            G_iwkq = 1. / (iw + mu - e_kq[k] - S_iwkq[n, min(lenS_kq - 1, k)])
             chi0 += G_iwk * G_iwkq
 
-    return -2.0 * chi0.real / beta
+    return -2. * chi0.real / beta
 
 _neg_flat_cache = {}
 
@@ -429,33 +465,21 @@ def search_min(lat, bz, bz_fine, mu, beta, q_min, q_path=None):
         e_k = bz_fine.unfold_f_k(e_k)
 
     nk = bz_fine.nk
-    Nk = len(e_k)
-
-    scratch_e = {
-        'R_grid_flat': np.empty((nk,) * (dim - 1) + (nk // 2 + 1,), dtype=np.complex128),
-        'e_kq': np.empty(Nk, dtype=np.float64),
-    }
-    scratch_de = {
-        'de_kq_dq': np.empty((dim, Nk), dtype=np.float64),
-        'grid_1d':  np.empty((nk,) * (dim - 1) + (nk // 2 + 1,), dtype=np.complex128),
-    }
 
     def invchi0_q_exact(s):
         q = start + np.dot(J, np.atleast_1d(s))
 
-        e_kq = get_e_kq(e_k, q, nk, method='fft', R_vecs=lat.R_vecs, t_vals=lat.t_vals,
-                         k_full=bz_fine.k_full, scratch=scratch_e)
-        de_kq_dq = get_de_kq_dq(e_k, q, nk, R_vecs=lat.R_vecs, t_vals=lat.t_vals,
-                                 scratch=scratch_de)
+        e_kq = get_e_kq(e_k, q, nk, method='fft', R_vecs=lat.R_vecs, t_vals=lat.t_vals)
+        de_kq_dq = get_de_kq_dq(e_k, q, nk, R_vecs=lat.R_vecs, t_vals=lat.t_vals)
 
-        chi0, dchi0_dq = lindhard_ksp_jac(mu, beta, e_k, e_kq, de_kq_dq=de_kq_dq)
+        chi0, dchi0_dq = lindhard_ksp_jac(mu, beta, e_k, e_kq, de_kq_dq)
 
         dinvchi0_dq = -dchi0_dq / chi0**2
         grad_s = J.T @ dinvchi0_dq
 
         return 1/chi0, grad_s
     
-    safe = 1
+    safe = 2
 
     if q_path is not None:
         start = q_grid[0]
@@ -486,7 +510,7 @@ def search_min(lat, bz, bz_fine, mu, beta, q_min, q_path=None):
         method='L-BFGS-B',
         jac=True,
         bounds=bounds,
-        options={'ftol': 1e-6, 'gtol': 1e-4, 'maxiter': 50}
+        options={'ftol': 1e-8, 'gtol': 1e-6, 'maxiter': 50}
     )
     s_min = res.x
 
@@ -512,15 +536,9 @@ def fit_invxi(lat, bz, bz_fine, mu, beta, q_min, U=None, q_path=None, invchi_gri
         if finer_bz.ibz:
             e_k = finer_bz.unfold_f_k(e_k)
 
-        scratch_e = {
-            'R_grid_flat': np.empty((nk,) * (lat.dim - 1) + (nk // 2 + 1,), dtype=np.complex128),
-            'e_kq':        np.empty(len(e_k), dtype=np.float64),
-        }
-
         chi_grid = []
         for q in q_grid:
-            e_kq = get_e_kq(e_k, q, nk, method='fft', R_vecs=lat.R_vecs, t_vals=lat.t_vals,
-                            k_full=finer_bz.k_full, scratch=scratch_e)
+            e_kq = get_e_kq(e_k, q, nk, method='fft', R_vecs=lat.R_vecs, t_vals=lat.t_vals)
 
             chi0 = lindhard_ksp(mu, beta, e_k, e_kq)
             chi_grid.append(chi0/(1 - U*chi0))

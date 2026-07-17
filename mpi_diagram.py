@@ -12,23 +12,24 @@ rank = comm.Get_rank()
 size = comm.Get_size()
 
 Gamma = 0.
-tp = 0.15
+tp = 0.2
 lat = LATTICE(tp=tp)
-bz = share_bz(lat, nk=200, comm=comm)
-bz_fine = share_bz(lat, nk=400, comm=comm)
+bz = share_bz(lat, nk=500, comm=comm)
+bz_fine = share_bz(lat, nk=1000, comm=comm)
 #bz_fine = None
 
 coarse = np.linspace(0.73, 1., 24)
 #fine = np.linspace(0.88, 0.90, 10)
-fine = np.linspace(0.89, 0.894, 8)
+fine = np.linspace(0.884, 0.89, 8)
 
 coarse = coarse[(coarse < fine[0]) | (coarse > fine[-1])]
 
 n_list = np.sort(np.concatenate([coarse, fine]))
-T_list = np.linspace(0., 0.1, 10)
+T_list = np.linspace(0., 0.15, 50)
 U = 3
 
 file_name = f'G{Gamma:.5g}tp{tp:.5g}U{U:.5g}.h5'
+print(f'will write to {file_name}')
 
 if os.path.exists(f'data/diagram/{file_name}'):
     with HDFArchive(f'data/diagram/{file_name}', "r") as ar:
@@ -51,7 +52,7 @@ if os.path.exists(f'data/diagram/{file_name}'):
 else:
     old_Tc = np.zeros(len(n_list))
 
-par_list = [[{'U': U, 'n': n_list[i], 'T': T + max(old_Tc[i], 0.01)} for T in T_list] for i in range(len(n_list))]
+par_list = [[{'U': U, 'n': n_list[i], 'T': T + max(old_Tc[i], 0.005)} for T in T_list] for i in range(len(n_list))]
 
 my_jobs = par_list[rank::size]
 t0 = time.time()
@@ -76,6 +77,7 @@ if rank == 0:
     flattened.sort(key=lambda d: d['n'])
     merged = merge_results(flattened)
 
+    print(f"writing results to {file_name}")
     with HDFArchive(f'data/diagram/{file_name}', "w") as ar:
         for key, value in merged.items():
             ar[key] = value

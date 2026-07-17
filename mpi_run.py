@@ -20,6 +20,7 @@ T_list = np.linspace(0.005, 0.2, 21)
 U = 3
 
 file_name = f'tp{tp:.5g}n{n:.5g}U{U:.5g}.h5'
+print(f'will write to {file_name}')
 
 par_list = [{'U': U, 'n': n, 'T': T} for T in T_list]
 my_jobs  = par_list[rank::size]

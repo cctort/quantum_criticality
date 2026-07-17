@@ -10,23 +10,26 @@ comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
 size = comm.Get_size()
 
-Gamma = 0.1
-tp = 0.
+Gamma = 0.05
+tp = 0.1
 lat = LATTICE(tp=tp)
-bz = share_bz(lat, nk=50, comm=comm)
+bz = share_bz(lat, nk=500, comm=comm)
 #bz_fine = share_bz(lat, nk=1000, comm=comm)
 bz_fine = None
 
 #n_list = np.linspace(0.735, 0.755, 5)
-#n_list = np.linspace(0.846, 0.85, 5) # tp 0.1
-#n_list = np.linspace(0.884905, 0.884965, 5) # tp 0.2
-#n_list = np.linspace(0.8505, 0.8515, 5) # Gamma=0.05
-n_list = np.linspace(0.8845, 0.885, 5) # Gamma=0.1
-T_list = np.linspace(0.02, 0.05, 5)
+#n_list = np.linspace(0.846, 0.85, 5) # tp=0.1
+#n_list = np.linspace(0.884905, 0.884965, 5) # tp=0.2
+#n_list = np.linspace(0.8503, 0.8513, 5) # Gamma=0.05
+#n_list = np.linspace(0.8846, 0.8851, 5) # Gamma=0.1
+n_list = np.linspace(0.8857, 0.8859, 5) # Gamma=0.05, tp=0.1
+#n_list = np.linspace(0.9055, 0.9056, 5) # Gamma=0.1, tp=0.1
+T_list = np.linspace(0.005, 0.015, 15)
 #T_list = np.linspace(0.01, 0.04, 5)
 U = 3
 
 file_name = f'G{Gamma:.5g}tp{tp:.5g}U{U:.5g}.h5'
+print(f'will write to {file_name}')
 
 par_list = [[{'U': U, 'n': n, 'T': T} for T in T_list] for n in n_list]
 
@@ -37,8 +40,8 @@ print(f"rank {rank} got {len(my_jobs)} jobs")
 
 results_list = []
 for pars in my_jobs:
-    #results_list.append(sweep_rpa(pars, lat, bz, bz_fine, q_path=([1,1,0.5],[1,1,1]), method='local', #fit_grid_pts=False, verbose=False, xi_range=[0,0,5e-4]))
-    results_list.append(sweep_rpa(pars, lat, bz, bz_fine, niw=2048, method='fft', S_list=-1j*Gamma, verbose=False, xi_range=[0,0,2e-2]))
+    #results_list.append(sweep_rpa(pars, lat, bz, bz_fine, q_path=([1,1,0.5],[1,1,1]), method='local', fit_grid_pts=False, verbose=False, xi_range=[0,0,5e-4]))
+    results_list.append(sweep_rpa(pars, lat, bz, bz_fine, niw=2048, method='fft', S_list=-1j*Gamma, verbose=False, xi_range=[0,0,1e-2]))
 
 t1 = time.time()
 peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
@@ -53,6 +56,7 @@ if rank == 0:
     flattened.sort(key=lambda d: d['n'])
     merged = merge_results(flattened)
 
+    print(f"writing results to {file_name}")
     with HDFArchive(f'data/scaling/{file_name}', "w") as ar:
         for key, value in merged.items():
             ar[key] = value

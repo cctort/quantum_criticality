@@ -38,7 +38,7 @@ def plot_chimin(data):
     ax[0].set_ylabel(r'$\chi^{-1}_m(\pi,\pi,q_z)$')
 
     ax[1].set_xlabel('$T$')
-    ax[1].set_ylabel('$Q_z/\pi$')
+    ax[1].set_ylabel(r'$\overline{q}_z/\pi$')
 
     axins = inset_axes(
         ax[0],
@@ -50,7 +50,7 @@ def plot_chimin(data):
         loc="lower left"
     )
 
-    axins.set_facecolor((0.98, 0.98, 0.98, 0.7))
+    axins.set_facecolor((0.95, 0.95, 0.95, 0.7))
 
     q_grid = np.linspace(data['q_path'][0], data['q_path'][-1], len(data['invchi'][0]))
     qz_grid = q_grid[:,-1]
@@ -105,65 +105,71 @@ def plot_chimin(data):
                 data['invchi_min'][i],
                 '*',
                 markersize=2,
-                color='red',
+                color='indianred',
                 zorder=-i
             )
 
-    qz_grid_fitted = np.linspace(
-        Qz_fit[0] - data['xi_range'][-1],
-        Qz_fit[0] + data['xi_range'][-1],
-        data['xi_pts']
-    )
+            if i == 0:
+                label1 = 'from OZ fit'
+                label2 = 'L-BFGS-B'
+            else:
+                label1 = None
+                label2 = None
 
-    mask = np.abs(qz_grid - Qz_ref[0]) < 4e-2
-    OZ_curve = [1/OZ(qz, *data['OZ_fit'][0]) for qz in qz_grid_fitted]
+            qz_grid_fitted = np.linspace(
+                Qz_fit[i] - data['xi_range'][-1],
+                Qz_fit[i] + data['xi_range'][-1],
+                data['xi_pts']
+            )
 
-    axins.plot(
-        qz_grid[mask],
-        data['invchi'][0][mask],
-        'o-',
-        markersize=5,
-        color=color_list[0],
-        zorder=0
-    )
+            axins.plot(
+                qz_grid,
+                data['invchi'][i],
+                'o-',
+                markersize=5,
+                color=color_list[i//plot_every],
+                zorder=0
+            )
 
-    axins.plot(
-        qz_grid_fitted,
-        OZ_curve,
-        '--',
-        color='black',
-        linewidth=1.2,
-        zorder=1
-    )
+            axins.plot(
+                qz_grid_fitted,
+                OZ_curve,
+                '--',
+                color='black',
+                linewidth=1.2,
+                zorder=1
+            )
 
-    axins.scatter(
-        Qz_fit[0],
-        1/OZ(Qz_fit[0], *data['OZ_fit'][0]),
-        marker='x',
-        s=30,
-        linewidths=1.8,
-        color='black',
-        label='from OZ fit',
-        zorder=2
-    )
+            axins.scatter(
+                Qz_fit[i],
+                1/OZ(Qz_fit[i], *data['OZ_fit'][i]),
+                marker='x',
+                s=30,
+                linewidths=1.8,
+                color='black',
+                label=label1,
+                zorder=2
+            )
 
-    axins.scatter(
-        Qz_ref[0],
-        data['invchi_min'][0],
-        marker='*',
-        s=20,
-        linewidths=1.8,
-        color='red',
-        label='exact',
-        zorder=3
-    )
+            axins.scatter(
+                Qz_ref[i],
+                data['invchi_min'][i],
+                marker='*',
+                s=20,
+                linewidths=1.8,
+                color='indianred',
+                label=label2,
+                zorder=3
+            )
 
     axins.grid(True)
     axins.tick_params(labelsize=15)
     axins.legend(loc='upper right', fontsize=12)
 
-    idx_max = np.argmax(data['invchi'][0][mask])
-    axins.set_ylim(0, (data['invchi'][0][mask][idx_max]+max(np.delete(data['invchi'][0][mask], idx_max)))/2)
+    mask = np.abs(qz_grid - Qz_ref[0]) < data['xi_range'][-1]*3
+    invchi_max = max(data['invchi'][0][mask])
+    axins.set_ylim(0, invchi_max*1.1)
+    axins.set_xlim(max(Qz_ref[0]-data['xi_range'][-1]*3, 0.5), min(Qz_ref[0]+data['xi_range'][-1]*3, 1))
 
     ax[1].plot(
         data['T'],
@@ -178,8 +184,8 @@ def plot_chimin(data):
         data['T'],
         Qz_ref,
         '--',
-        color='red',
-        label='exact'
+        color='indianred',
+        label='L-BFGS-B'
     )
 
     ax[1].plot(
@@ -199,7 +205,6 @@ def plot_chimin(data):
 
     ax[1].set_xlim(left=0.)
     ax[0].set_xlim(0.5,1)
-    axins.set_xlim(max(Qz_ref[0]-3e-2,0.5), min(Qz_ref[0]+3e-2,1))
     ax[0].set_ylim(bottom=0.)
 
     fig.tight_layout()
@@ -364,13 +369,12 @@ def plot_scaling(data, x_exp=(1,1,1), fit=False, origin=True, right="OZ"):
     fig.tight_layout()
     return fig
 
-def plot_diagram(data_list, var_list, var_plotlabel, inset_xrange=None, subplots='commens'):
+def plot_diagram(data_list, var_list, var_plotlabel, inset_xrange=None, subplots='commens', c0=0):
 
     fig = plt.figure(figsize=(12, 6))
     ax = [fig.add_subplot(1,2,1),
           fig.add_subplot(2,2,2),
           fig.add_subplot(2,2,4)]
-    #fig.subplots_adjust(hspace=0.15, wspace=0.03)
 
     for a in ax:
         a.grid()
@@ -385,6 +389,7 @@ def plot_diagram(data_list, var_list, var_plotlabel, inset_xrange=None, subplots
     elif subplots == 'scaling':
         ax[1].set_ylabel(r'$\gamma$')
         ax[2].set_ylabel(r'$\mathcal{A}(T_N)$')
+        ax[2].set_ylim(0, 0.2)
 
     ax[1].tick_params(axis='x', labelbottom=False)
     ax[0].set_xlabel(r'$n$')
@@ -395,75 +400,70 @@ def plot_diagram(data_list, var_list, var_plotlabel, inset_xrange=None, subplots
     if inset_xrange is not None:
         x1, x2 = inset_xrange
         axins = inset_axes(
-            ax[0], width="45%", height="45%",
-            bbox_to_anchor=(0.13, 0.13, 0.85, 0.85),  # (x0, y0, width, height) in axes fraction
+            ax[0],
+            width="45%",
+            height="45%",
+            bbox_to_anchor=(0.13, 0.13, 0.85, 0.85),
             bbox_transform=ax[0].transAxes,
             loc='upper right'
         )
         axins.grid()
-        axins.set_xlim(x1, x2)
-        axins.invert_xaxis()
+        axins.set_xlim(max(x1, x2), min(x1, x2))   # inverted like the main axes
+        axins.set_facecolor((0.95, 0.95, 0.95, 0.7))
 
     for i, data in enumerate(data_list):
         n_list = data['n']
 
-        Tc = - abs(data['c']/data['a'])**(1/data['b']) * np.sign(data['c']/data['a'])
+        Tc = -abs(data['c']/data['a'])**(1/data['b']) * np.sign(data['c']/data['a'])
+
         if subplots == 'commens':
-            y1 = data['Qc'][:,-1]
+            y1 = data['Qc'][:, -1]
             y2 = data['mu_c']
         elif subplots == 'scaling':
             y1 = data['b']
-            y2 = - abs(data['cOZ']/data['aOZ'])**(1/data['bOZ']) * np.sign(data['cOZ']/data['aOZ'])
-            ax[2].set_ylim(0,0.2)
+            y2 = -abs(data['cOZ']/data['aOZ'])**(1/data['bOZ']) * np.sign(data['cOZ']/data['aOZ'])
 
         label = rf"${var_plotlabel}={var_list[i]}$"
 
-        ax[0].plot(n_list, Tc, 'o-', label=label, markersize=4, color=color_list[i])
-        ax[1].plot(n_list, y1, 'o-', label=label, markersize=4, color=color_list[i])
-        ax[2].plot(n_list, y2, 'o-', label=label, markersize=4, color=color_list[i])
+        color = color_list[c0+i]
+
+        ax[0].plot(n_list, Tc, 'o-', label=label, markersize=4, color=color)
+        ax[1].plot(n_list, y1, 'o-', markersize=4, color=color)
+        ax[2].plot(n_list, y2, 'o-', markersize=4, color=color)
 
         if axins is not None:
-            axins.plot(n_list, Tc, 'o-', markersize=4, color=color_list[i])
+            axins.plot(n_list, Tc, 'o-', markersize=4, color=color)
 
         nc = np.interp(0., Tc, n_list)
         for a in ax:
-            a.axvline(nc, linestyle='--', color=color_list[i], alpha=0.6)
+            a.axvline(nc, linestyle='--', color=color, alpha=0.6)
+
         if axins is not None:
-            axins.axvline(nc, linestyle='--', color=color_list[i], alpha=0.6)
-
-    if axins is not None:
-        # auto-scale y to the data within [x1, x2], with a little padding
-        y_vals = []
-        for data in data_list:
-            n_arr = np.asarray(data['n'])
-            Tc_arr = -abs(data['c']/data['a'])**(1/data['b']) * np.sign(data['c']/data['a'])
-            lo, hi = min(x1, x2), max(x1, x2)
-            mask = (n_arr >= lo) & (n_arr <= hi)
-            if mask.any():
-                vals = Tc_arr[mask]
-                vals = vals[np.isfinite(vals)]  # drop NaN/Inf
-                if vals.size:
-                    y_vals.append(vals)
-
-        if y_vals:
-            y_all = np.concatenate(y_vals)
-            ymin, ymax = np.nanmin(y_all), np.nanmax(y_all)
-            if np.isfinite(ymin) and np.isfinite(ymax):
-                if ymin == ymax:
-                    # avoid zero-height ylim if all values in range are identical
-                    pad = 0.05 * abs(ymin) if ymin != 0 else 0.05
-                else:
-                    pad = 0.05 * (ymax - ymin)
-                axins.set_ylim(ymin - pad, ymax + pad)
-            else:
-                axins.set_ylim(auto=True)  # fallback, shouldn't hit after filtering
-        else:
-            axins.set_ylim(auto=True)  # no finite data in range, let mpl autoscale
-
-        mark_inset(ax[0], axins, loc1=2, loc2=4, fc="none", ec="0.7")
+            axins.axvline(nc, linestyle='--', color=color, alpha=0.6)
 
     ax[0].legend(loc='lower left')
-    ax[0].set_ylim(0,0.4)
+    ax[0].set_ylim(0, 0.4)
+    if axins is not None:
+        xlo, xhi = sorted(inset_xrange)
+
+        ymin, ymax = np.inf, -np.inf
+
+        for data in data_list:
+            n = data['n']
+            Tc = -abs(data['c']/data['a'])**(1/data['b']) * np.sign(data['c']/data['a'])
+
+            mask = (n >= xlo) & (n <= xhi)
+            idx = np.where(mask)[0]
+
+            if idx.size:
+                i0 = max(idx[0] - 1, 0)
+                i1 = min(idx[-1] + 1, len(n) - 1)
+
+                ymin = min(ymin, Tc[i0:i1+1].min())
+                ymax = max(ymax, Tc[i0:i1+1].max())
+
+        axins.set_ylim(max(ymin,0), ymax)
 
     fig.tight_layout()
+
     return fig
