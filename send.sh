@@ -5,7 +5,7 @@
 #SBATCH --ntasks=5
 #SBATCH --cpus-per-task=12
 #SBATCH --mem=500G
-#SBATCH --time=24:00:00
+#SBATCH --time=48:00:00
 #SBATCH --output=log/rpa_%j.out
 
 eval "$(/home/carlo/tools/bin/micromamba shell hook --shell bash)"
@@ -19,7 +19,7 @@ export NUMBA_THREADING_LAYER=omp
 
 export PMIX_MCA_psec=native
 
-srun --mpi=pmix python mpi_diagram.py
+srun --mpi=pmix python mpi_scaling_scba.py
 #py-spy record --native -o profile_native.svg --rate 20 --subprocesses -- python mpi_scaling.py
 #srun --mpi=pmix bash -c '
 #  memray run --aggregate -f -o memray_out/profile_rank${SLURM_PROCID}.bin -- mpi_scaling.py

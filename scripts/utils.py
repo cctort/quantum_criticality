@@ -12,13 +12,22 @@ def merge_results(results, force_array=None):
 
     for key in keys:
         values = [r[key] for r in results]
-
         first = values[0]
-        same = all(
-            np.array_equal(first, v) if isinstance(first, np.ndarray)
-            else first == v
-            for v in values[1:]
-        )
+
+        same = True
+        for v in values[1:]:
+            try:
+                if isinstance(first, np.ndarray) or isinstance(v, np.ndarray):
+                    if not np.array_equal(first, v):
+                        same = False
+                        break
+                else:
+                    if not (first == v):
+                        same = False
+                        break
+            except (ValueError, TypeError):
+                same = False
+                break
 
         if same and key not in force_array:
             merged[key] = first

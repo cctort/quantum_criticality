@@ -12,24 +12,24 @@ rank = comm.Get_rank()
 size = comm.Get_size()
 
 Gamma = 0.
-tp = 0.2
+tp = 0.
 lat = LATTICE(tp=tp)
-bz = share_bz(lat, nk=500, comm=comm)
-bz_fine = share_bz(lat, nk=1000, comm=comm)
+bz = share_bz(lat, nk=400, comm=comm)
+bz_fine = share_bz(lat, nk=800, comm=comm)
 #bz_fine = None
 
 coarse = np.linspace(0.73, 1., 24)
-#fine = np.linspace(0.88, 0.90, 10)
 fine = np.linspace(0.884, 0.89, 8)
+finer = np.linspace(0.887, 0.889, 6)
 
 coarse = coarse[(coarse < fine[0]) | (coarse > fine[-1])]
+fine = fine[(fine < finer[0]) | (fine > finer[-1])]
 
-n_list = np.sort(np.concatenate([coarse, fine]))
-T_list = np.linspace(0., 0.15, 50)
+n_list = np.sort(np.concatenate([coarse, fine, finer]))
+T_list = np.linspace(0., 0.2, 100)
 U = 3
 
 file_name = f'G{Gamma:.5g}tp{tp:.5g}U{U:.5g}.h5'
-print(f'will write to {file_name}')
 
 if os.path.exists(f'data/diagram/{file_name}'):
     with HDFArchive(f'data/diagram/{file_name}', "r") as ar:
@@ -61,7 +61,7 @@ print(f"rank {rank} got {len(my_jobs)} jobs")
 
 results_list = []
 for pars in my_jobs:
-    results_list.append(sweep_rpa(pars, lat, bz, bz_fine, q_path=([1,1,0.5],[1,1,1]), method='local', fit_grid_pts=False, verbose=False, xi_range=[0,0,1e-3], fit=True))
+    results_list.append(sweep_rpa(pars, lat, bz, bz_fine, q_path=([1,1,0.5],[1,1,1]), method='local', fit_grid_pts=False, verbose=False, xi_range=[0,0,1e-2], fit=True))
     #results_list.append(sweep_rpa(pars, lat, bz, bz_fine, niw=512, method='fft', S_list=-1j*0.025, verbose=False, xi_range=[0,0,2e-2]))
 
 t1 = time.time()

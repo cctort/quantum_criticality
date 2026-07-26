@@ -27,7 +27,7 @@ import seaborn as sns
 color_list = sns.color_palette('colorblind') + sns.color_palette("Set2") + sns.color_palette("Set3")
 
 
-def plot_chimin(data):
+def plot_chimin(data, peak_on_the='right'):
 
     fig = plt.figure(figsize=(12, 6))
     gs = fig.add_gridspec(1, 2, width_ratios=[2, 1])
@@ -40,13 +40,19 @@ def plot_chimin(data):
     ax[1].set_xlabel('$T$')
     ax[1].set_ylabel(r'$\overline{q}_z/\pi$')
 
+    if peak_on_the == 'right':
+        bbox_to_anchor=(0.1, 0.08, 1, 1)
+        loc_leg = 'upper right'
+    else:
+        bbox_to_anchor=(0.63, 0.08, 1, 1)
+        loc_leg = 'upper left'
+
     axins = inset_axes(
         ax[0],
         width="30%",
         height="40%",
         bbox_transform=ax[0].transAxes,
-        #bbox_to_anchor=(0.1, 0.08, 1, 1),
-        bbox_to_anchor=(0.63, 0.08, 1, 1),
+        bbox_to_anchor=bbox_to_anchor,
         loc="lower left"
     )
 
@@ -64,50 +70,16 @@ def plot_chimin(data):
         plot_every = 4
         if i % plot_every == 0:
 
-            ax[0].plot(
-                qz_grid,
-                data['invchi'][i],
-                'o-',
-                markersize=2,
-                label=f'T={T:.4g}',
-                color=color_list[i//plot_every],
-                zorder=-i
-            )
+            ax[0].plot(qz_grid, data['invchi'][i], 'o-', markersize=2, label=f'T={T:.4g}', color=color_list[i//plot_every], zorder=-i)
 
-            qz_grid_fitted = np.linspace(
-                Qz_fit[i]-data['xi_range'][-1],
-                Qz_fit[i]+data['xi_range'][-1],
-                data['xi_pts']
-            )
+            qz_grid_fitted = np.linspace(Qz_fit[i]-data['xi_range'][i][-1], Qz_fit[i]+data['xi_range'][i][-1], 20)
 
             OZ_curve = [1/OZ(qz, *data['OZ_fit'][i]) for qz in qz_grid_fitted]
 
-            ax[0].plot(
-                qz_grid_fitted,
-                OZ_curve,
-                '--',
-                color='black',
-                linewidth=1,
-                zorder=-i
-            )
-
-            ax[0].plot(
-                Qz_fit[i],
-                1/OZ(Qz_fit[i], *data['OZ_fit'][i]),
-                'x',
-                markersize=4,
-                color='black',
-                zorder=-i
-            )
-
-            ax[0].plot(
-                Qz_ref[i],
-                data['invchi_min'][i],
-                '*',
-                markersize=2,
-                color='indianred',
-                zorder=-i
-            )
+            ax[0].plot(qz_grid_fitted, OZ_curve, ':', color='black', linewidth=1, zorder=-i)
+            ax[0].plot(Qz_fit[i], 1/OZ(Qz_fit[i], *data['OZ_fit'][i]), 'x', markersize=4, color='black', zorder=-i)
+            if isinstance(data['bz_fine'], dict):
+                ax[0].plot(Qz_ref[i], data['invchi_min'][i], '*', markersize=2, color='indianred', zorder=-i)
 
             if i == 0:
                 label1 = 'from OZ fit'
@@ -116,91 +88,38 @@ def plot_chimin(data):
                 label1 = None
                 label2 = None
 
-            qz_grid_fitted = np.linspace(
-                Qz_fit[i] - data['xi_range'][-1],
-                Qz_fit[i] + data['xi_range'][-1],
-                data['xi_pts']
-            )
+            qz_grid_fitted = np.linspace(Qz_fit[i] - data['xi_range'][i][-1], Qz_fit[i] + data['xi_range'][i][-1], 20)
 
-            axins.plot(
-                qz_grid,
-                data['invchi'][i],
-                'o-',
-                markersize=5,
-                color=color_list[i//plot_every],
-                zorder=0
-            )
+            axins.plot(qz_grid, data['invchi'][i], 'o-', markersize=5, color=color_list[i//plot_every], zorder=0)
 
-            axins.plot(
-                qz_grid_fitted,
-                OZ_curve,
-                '--',
-                color='black',
-                linewidth=1.2,
-                zorder=1
-            )
+            axins.plot(qz_grid_fitted, OZ_curve, ':', color='black', linewidth=1.2, zorder=1)
 
-            axins.scatter(
-                Qz_fit[i],
-                1/OZ(Qz_fit[i], *data['OZ_fit'][i]),
-                marker='x',
-                s=30,
-                linewidths=1.8,
-                color='black',
-                label=label1,
-                zorder=2
-            )
+            axins.scatter(Qz_fit[i], 1/OZ(Qz_fit[i], *data['OZ_fit'][i]), marker='x', s=30, linewidths=1.8, color='black', label=label1, zorder=2)
 
-            axins.scatter(
-                Qz_ref[i],
-                data['invchi_min'][i],
-                marker='*',
-                s=20,
-                linewidths=1.8,
-                color='indianred',
-                label=label2,
-                zorder=3
-            )
+            if isinstance(data['bz_fine'], dict):
+                axins.scatter(Qz_ref[i], data['invchi_min'][i], marker='*', s=20, linewidths=1.8, color='indianred', label=label2, zorder=3)
 
     axins.grid(True)
     axins.tick_params(labelsize=15)
     axins.legend(loc='upper right', fontsize=12)
 
-    mask = np.abs(qz_grid - Qz_ref[0]) < data['xi_range'][-1]*3
+    xlim = max(1e-2, 2*data['xi_range'][0][-1])
+    mask = np.abs(qz_grid - Qz_ref[0]) < xlim
     invchi_max = max(data['invchi'][0][mask])
     axins.set_ylim(0, invchi_max*1.1)
-    axins.set_xlim(max(Qz_ref[0]-data['xi_range'][-1]*3, 0.5), min(Qz_ref[0]+data['xi_range'][-1]*3, 1))
+    axins.set_xlim(max(Qz_ref[0]-xlim, 0.5), min(Qz_ref[0]+xlim, 1))
 
-    ax[1].plot(
-        data['T'],
-        Qz,
-        'o-',
-        markersize=4,
-        color='steelblue',
-        label='from $q$ grid'
-    )
+    ax[1].plot(data['T'], Qz, 'o-', markersize=4, color='steelblue', label='from $q$ grid')
 
-    ax[1].plot(
-        data['T'],
-        Qz_ref,
-        '--',
-        color='indianred',
-        label='L-BFGS-B'
-    )
+    if isinstance(data['bz_fine'], dict):
+        ax[1].plot(data['T'], Qz_ref, '--', color='indianred', label='L-BFGS-B')
 
-    ax[1].plot(
-        data['T'],
-        Qz_fit,
-        '--',
-        color='black',
-        linewidth=0.8,
-        label='from OZ fit'
-    )
+    ax[1].plot(data['T'], Qz_fit, '--', color='black', linewidth=0.8, label='from OZ fit')
 
     for a in ax:
         a.grid()
         
-    ax[0].legend(loc='upper left')
+    ax[0].legend(loc=loc_leg)
     ax[1].legend()
 
     ax[1].set_xlim(left=0.)
