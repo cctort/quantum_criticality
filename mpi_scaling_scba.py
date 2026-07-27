@@ -16,11 +16,11 @@ lat = LATTICE(tp=tp)
 bz = share_bz(lat, nk=500, comm=comm)
 bz_fine = None
 
-n_list = np.linspace(0.78, 0.785, 5) # v = 0.1
-#n_list = np.linspace(0.8368, 0.8378, 5) # v = 0.3
-T_list = np.linspace(0.005, 0.015, 2)
+#n_list = np.linspace(0.785, 0.789, 5) # v = 0.1
+n_list = np.linspace(0.8368, 0.8378, 5) # v = 0.3
+T_list = np.linspace(0.005, 0.015, 15)
 U = 3
-v = 0.1
+v = 0.3
 niw = 2048
 
 file_name = f'v{v:.5g}tp{tp:.5g}U{U:.5g}.h5'
