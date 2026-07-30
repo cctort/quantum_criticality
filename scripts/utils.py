@@ -209,6 +209,6 @@ def run_parallel(worker, inputs, workers=-1):
 def HMM(x, a, b, c):
     return a * np.sign(x)*np.abs(x)**b + c
 
-def OZ(s, a, b, invxi, s_min):
+def OZ(s, a, b, c, s_min):
     x = np.pi * (s - s_min)
-    return a/(x**2 + invxi**2 + b*x**3)
+    return 1.0/(a*x**2 + c + b*x**3)

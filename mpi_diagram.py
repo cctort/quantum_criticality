@@ -12,7 +12,7 @@ rank = comm.Get_rank()
 size = comm.Get_size()
 
 Gamma = 0.
-tp = 0.25
+tp = 0.15
 lat = LATTICE(tp=tp)
 bz = share_bz(lat, nk=400, comm=comm)
 bz_fine = share_bz(lat, nk=800, comm=comm)
@@ -20,15 +20,15 @@ bz_fine = share_bz(lat, nk=800, comm=comm)
 
 coarse = np.linspace(0.73, 1., 24)
 fine = np.linspace(0.884, 0.89, 8)
-finer = np.linspace(fine[1], fine[2], 6)
-#finer2 = np.linspace(coarse[-14], coarse[-13], 6)
+finer = np.linspace(fine[-4], fine[-3], 6)
+finer2 = np.linspace(coarse[12], coarse[13], 6)
 
 coarse = coarse[(coarse < fine[0]) | (coarse > fine[-1])]
-fine = fine[(fine < finer[0]) | (fine > finer[-1])]
-#fine = fine[((fine < finer[0]) | (fine > finer[-1])) or ((fine < finer2[0]) | (fine > finer2[-1]))]
+#fine = fine[(fine < finer[0]) | (fine > finer[-1])]
+fine = fine[((fine < finer[0]) | (fine > finer[-1])) & ((fine < finer2[0]) | (fine > finer2[-1]))]
 
-n_list = np.sort(np.concatenate([coarse, fine, finer]))
-T_list = np.linspace(0., 0.15, 100)
+n_list = np.sort(np.concatenate([coarse, fine, finer, finer2]))
+T_list = np.linspace(0., 0.18, 180)
 U = 3
 
 file_name = f'G{Gamma:.5g}tp{tp:.5g}U{U:.5g}.h5'

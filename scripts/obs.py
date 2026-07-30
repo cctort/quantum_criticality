@@ -184,21 +184,95 @@ def lindhard_ksp_jac(mu, beta, e_k, e_kq, de_kq_dq):
 
 @njit(parallel=True, cache=True)
 def matsubara_ksp(mu, beta, e_k, e_kq, S_iwk, S_iwkq):
-    
+
     Nk = len(e_k)
     niw = len(S_iwk)
     lenS_k = len(S_iwk[0])
     lenS_kq = len(S_iwkq[0])
 
-    chi0 = 0.0j
-    for n in range(niw):
-        iw = 1j * (2*n + 1) * np.pi / beta
-        for k in range(Nk):
-            G_iwk  = 1. / (iw + mu - e_k[k] - S_iwk[n, min(lenS_k - 1, k)])
-            G_iwkq = 1. / (iw + mu - e_kq[k] - S_iwkq[n, min(lenS_kq - 1, k)])
-            chi0 += G_iwk * G_iwkq
+    block_size = 4096
+    nblocks = (Nk + block_size - 1) // block_size
 
-    return -2. * chi0.real / beta
+    partial_chi0 = np.zeros(nblocks, dtype=np.float64)
+
+    for b in prange(nblocks):
+
+        start = b * block_size
+        stop = min(start + block_size, Nk)
+
+        chi = 0.0
+
+        for k in range(start, stop):
+            idx_k  = min(lenS_k - 1, k)
+            idx_kq = min(lenS_kq - 1, k)
+
+            for n in range(niw):
+                iw = 1j * (2*n + 1) * np.pi / beta
+
+                G_iwk  = 1. / (iw + mu - e_k[k] - S_iwk[n, idx_k])
+                G_iwkq = 1. / (iw + mu - e_kq[k] - S_iwkq[n, idx_kq])
+
+                chi += (G_iwk * G_iwkq).real
+
+        partial_chi0[b] = chi
+
+    chi0 = 0.0
+    for b in range(nblocks):
+        chi0 += partial_chi0[b]
+
+    return -2. * chi0 / (beta * Nk)
+
+@njit(parallel=True, cache=True)
+def matsubara_ksp_jac(mu, beta, e_k, e_kq, de_kq_dq, S_iwk, S_iwkq):
+
+    Nk = len(e_k)
+    niw = len(S_iwk)
+    lenS_k = len(S_iwk[0])
+    lenS_kq = len(S_iwkq[0])
+    dim = de_kq_dq.shape[0]
+
+    block_size = 4096
+    nblocks = (Nk + block_size - 1) // block_size
+
+    partial_chi0 = np.zeros(nblocks, dtype=np.float64)
+    partial_dchi = np.zeros((nblocks, dim), dtype=np.float64)
+
+    for b in prange(nblocks):
+
+        start = b * block_size
+        stop = min(start + block_size, Nk)
+
+        chi = 0.0
+        dchi = np.zeros(dim, dtype=np.float64)
+
+        for k in range(start, stop):
+            idx_k = min(lenS_k - 1, k)
+            idx_kq = min(lenS_kq - 1, k)
+
+            for n in range(niw):
+                iw = 1j * (2*n + 1) * np.pi / beta
+
+                G_iwk  = 1. / (iw + mu - e_k[k] - S_iwk[n, idx_k])
+                G_iwkq = 1. / (iw + mu - e_kq[k] - S_iwkq[n, idx_kq])
+
+                chi += (G_iwk * G_iwkq).real
+
+                dG = G_iwk * G_iwkq * G_iwkq 
+                for d in range(dim):
+                    dchi[d] += (dG * de_kq_dq[d, k]).real
+
+        partial_chi0[b] = chi
+        for d in range(dim):
+            partial_dchi[b, d] = dchi[d]
+
+    chi0 = 0.0
+    dchi0 = np.zeros(dim)
+    for b in range(nblocks):
+        chi0 += partial_chi0[b]
+        for d in range(dim):
+            dchi0[d] += partial_dchi[b, d]
+
+    return -2. * chi0 / (beta * Nk), -2. * dchi0 / (beta * Nk)
 
 _neg_flat_cache = {}
 
@@ -458,7 +532,7 @@ def get_invchi0_grid(bz, mu, beta, q_path=None, method='fft', niw=1, S_val=None,
 
     return np.array(q_min), invchi0_min, np.array(subgrid)
 
-def search_min(lat, bz, bz_fine, mu, beta, q_min, q_path=None):
+def search_min(lat, bz, bz_fine, mu, beta, q_min, niw, S_val, q_path=None):
     
     dim = bz.dim
 
@@ -468,8 +542,13 @@ def search_min(lat, bz, bz_fine, mu, beta, q_min, q_path=None):
         q_grid = bz.k_vecs / np.pi
 
     e_k = bz_fine.e_k
+    Nk = len(e_k)
+    S_iwk, k_dep = get_iwk_arr(S_val, Nk, niw)
+
     if bz_fine.ibz:
         e_k = bz_fine.unfold_f_k(e_k)
+        if k_dep:
+            S_iwk = bz_fine.unfold_f_iwk(S_iwk)
 
     nk = bz_fine.nk
 
@@ -479,14 +558,22 @@ def search_min(lat, bz, bz_fine, mu, beta, q_min, q_path=None):
         e_kq = get_e_kq(e_k, q, nk, method='fft', R_vecs=lat.R_vecs, t_vals=lat.t_vals)
         de_kq_dq = get_de_kq_dq(e_k, q, nk, R_vecs=lat.R_vecs, t_vals=lat.t_vals)
 
-        chi0, dchi0_dq = lindhard_ksp_jac(mu, beta, e_k, e_kq, de_kq_dq)
+        if niw == 1:
+            chi0, dchi0_dq = lindhard_ksp_jac(mu, beta, e_k, e_kq, de_kq_dq)
+        else:
+            if k_dep:
+                S_iwkq = get_f_iwkq(S_iwk, q, nk)
+            else:
+                S_iwkq = S_iwk
+
+            chi0, dchi0_dq = matsubara_ksp_jac(mu, beta, e_k, e_kq, de_kq_dq, S_iwk, S_iwkq)
 
         dinvchi0_dq = -dchi0_dq / chi0**2
         grad_s = J.T @ dinvchi0_dq
 
         return 1/chi0, grad_s
     
-    safe = 2
+    safe = 1
 
     if q_path is not None:
         start = q_grid[0]
@@ -504,7 +591,7 @@ def search_min(lat, bz, bz_fine, mu, beta, q_min, q_path=None):
         J = lat.b_vecs / (2*np.pi)
         J_inv = np.linalg.inv(J)
         s0 = J_inv @ (q_min - start)
-        step = 2.0 / lat.nk
+        step = 2.0 / bz.nk
         bounds = []
         for d in range(dim):
             lo = max(0.0, s0[d] - safe*step)
@@ -526,12 +613,14 @@ def search_min(lat, bz, bz_fine, mu, beta, q_min, q_path=None):
 
     return np.asarray(q_min), invchi0_min
 
-def fit_invxi(lat, bz, bz_fine, mu, beta, q_min, U=None, q_path=None, invchi_grid=None, fit_range=[0,0,1e-2], fit_pts=8, fit_grid_pts=True, fit_qmin=False, p0=None):
+def fit_invxi(lat, bz, bz_fine, mu, beta, q_min, niw, S_val, U=None, q_path=None, invchi_grid=None, fit_range=[0,0,1e-2], fit_pts=8, fit_grid_pts=True, fit_qmin=False, p0=None):
 
     finer_bz = bz_fine if bz_fine is not None else bz
 
     nk = finer_bz.nk
     e_k = finer_bz.e_k
+    Nk = len(e_k)
+    S_iwk, k_dep = get_iwk_arr(S_val, Nk, niw)
     
     start = q_min - fit_range
     stop = q_min + fit_range
@@ -542,12 +631,22 @@ def fit_invxi(lat, bz, bz_fine, mu, beta, q_min, U=None, q_path=None, invchi_gri
 
         if finer_bz.ibz:
             e_k = finer_bz.unfold_f_k(e_k)
+            if k_dep:
+                S_iwk = finer_bz.unfold_f_iwk(S_iwk)
 
         chi_grid = np.zeros(fit_pts)
         for iq, q in enumerate(q_grid):
             e_kq = get_e_kq(e_k, q, nk, method='fft', R_vecs=lat.R_vecs, t_vals=lat.t_vals)
 
-            chi0 = lindhard_ksp(mu, beta, e_k, e_kq)
+            if niw == 1:
+                chi0 = lindhard_ksp(mu, beta, e_k, e_kq)
+            else:
+                if k_dep:
+                    S_iwkq = get_f_iwkq(S_iwk, q, nk)
+                else:
+                    S_iwkq = S_iwk
+
+                chi0 = matsubara_ksp(mu, beta, e_k, e_kq, S_iwk, S_iwkq)
             chi_grid[iq] = chi0/(1 - U*chi0)
     
     else:
@@ -704,11 +803,11 @@ def run_rpa(par, lat, bz, bz_fine=None, niw=1, S_val=None, q_path=None, method='
 
     if verbose: print(f'U={U:.5g}, T={T:.5g}, n={n:.5g}: 1/chi0 minimum search over grid with nk={bz.nk}...', end='')
     Q, invchi0_Q, invchi0_grid = get_invchi0_grid(bz, mu, 1/T, q_path, method, niw, S_val, niw_fit)
-    
+
     if bz_fine is not None:
         if verbose: print(f'U={U:.5g}, T={T:.5g}, n={n:.5g}: 1/chi0 minimum refinement with nk\'={bz_fine.nk}...', end='')
-        Q, invchi0_Q = search_min(lat, bz, bz_fine, mu, 1/T, Q, q_path)
-    
+        Q, invchi0_Q = search_min(lat, bz, bz_fine, mu, 1/T, Q, niw, S_val, q_path)
+
     invchi_Q = invchi0_Q.real - U
     run_data['invchi'] = invchi0_grid.real - U
     
@@ -730,7 +829,7 @@ def run_rpa(par, lat, bz, bz_fine=None, niw=1, S_val=None, q_path=None, method='
                     a_prev = a_curr
 
                 xi_range = [0, 0, min(max(a_prev/16, min_range), 0.1)]
-                run_data['OZ_fit'], run_data['Q_fitted'] = fit_invxi(lat, bz, bz_fine, mu, 1/T, Q, U, q_path, invchi0_grid.real-U, xi_range, xi_pts, fit_grid_pts, fit_qmin, p0)
+                run_data['OZ_fit'], run_data['Q_fitted'] = fit_invxi(lat, bz, bz_fine, mu, 1/T, Q, niw, S_val, U, q_path, invchi0_grid.real-U, xi_range, xi_pts, fit_grid_pts, fit_qmin, p0)
                 a_curr = run_data['OZ_fit'][0]
                 p0 = list(run_data['OZ_fit'][:-1])
                 p0[1] = 0.
@@ -739,7 +838,7 @@ def run_rpa(par, lat, bz, bz_fine=None, niw=1, S_val=None, q_path=None, method='
 
             run_data['xi_range'] = [0, 0, min(max(a_prev/16, min_range), 0.1)]
             '''
-            run_data['OZ_fit'], run_data['Q_fitted'] = fit_invxi(lat, bz, bz_fine, mu, 1/T, Q, U, q_path, invchi0_grid.real-U, xi_range, xi_pts, fit_grid_pts, fit_qmin)
+            run_data['OZ_fit'], run_data['Q_fitted'] = fit_invxi(lat, bz, bz_fine, mu, 1/T, Q, niw, S_val, U, q_path, invchi0_grid.real-U, xi_range, xi_pts, fit_grid_pts, fit_qmin)
 
             invxi = run_data['OZ_fit'][2]
             OZ_weight = run_data['OZ_fit'][0]
