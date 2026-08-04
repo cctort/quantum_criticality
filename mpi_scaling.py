@@ -13,10 +13,10 @@ size = comm.Get_size()
 Gamma = 0.01
 tp = 0.
 lat = LATTICE(tp=tp)
-bz = share_bz(lat, nk=300, comm=comm)
+bz = share_bz(lat, nk=500, comm=comm)
 #bz_fine = share_bz(lat, nk=1000, comm=comm)
 #bz_fine = None
-bz_fine = bz
+bz_fine = None
 
 #n_list = np.linspace(0.735, 0.755, 5)
 #n_list = np.linspace(0.846, 0.85, 5) # tp=0.1

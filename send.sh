@@ -19,7 +19,7 @@ export NUMBA_THREADING_LAYER=omp
 
 export PMIX_MCA_psec=native
 
-srun --mpi=pmix python mpi_scaling.py
+srun --mpi=pmix python mpi_diagram.py
 #py-spy record --native -o profile_native.svg --rate 20 --subprocesses -- python mpi_scaling.py
 #srun --mpi=pmix bash -c '
 #  memray run --aggregate -f -o memray_out/profile_rank${SLURM_PROCID}.bin -- mpi_scaling.py

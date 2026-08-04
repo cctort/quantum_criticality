@@ -567,6 +567,7 @@ def search_min(lat, bz, bz_fine, mu, beta, q_min, niw, S_val, q_path=None):
                 S_iwkq = S_iwk
 
             chi0, dchi0_dq = matsubara_ksp_jac(mu, beta, e_k, e_kq, de_kq_dq, S_iwk, S_iwkq)
+            chi0 += beta / (2*np.pi**2) * zeta(2, niw + 0.5)
 
         dinvchi0_dq = -dchi0_dq / chi0**2
         grad_s = J.T @ dinvchi0_dq
@@ -613,7 +614,25 @@ def search_min(lat, bz, bz_fine, mu, beta, q_min, niw, S_val, q_path=None):
 
     return np.asarray(q_min), invchi0_min
 
-def fit_invxi(lat, bz, bz_fine, mu, beta, q_min, niw, S_val, U=None, q_path=None, invchi_grid=None, fit_range=[0,0,1e-2], fit_pts=8, fit_grid_pts=True, fit_qmin=False, p0=None):
+def sub_grid(q_min, fit_range, k_grid, invchi_grid):
+
+    fit_range = np.array(fit_range)
+
+    start = q_min - fit_range
+    stop = q_min + fit_range
+    
+    q_path = (start, stop)
+    q_grid, path_mask = get_grid_from_path(q_path, k_grid)
+    chi_grid = 1/np.asarray(invchi_grid[path_mask])
+
+    e_hat = (stop - start)
+    e_hat /= np.linalg.norm(e_hat)
+    s_grid = q_grid @ e_hat
+    s0 = q_min @ e_hat  
+
+    return s0, s_grid, chi_grid
+
+def fit_invxi(lat, bz, bz_fine, mu, beta, q_min, niw, S_val, invchi_grid, U, q_path=None, fit_range=None, fit_pts=8, fit_grid_pts=True, fit_qmin=False):
 
     finer_bz = bz_fine if bz_fine is not None else bz
 
@@ -621,79 +640,101 @@ def fit_invxi(lat, bz, bz_fine, mu, beta, q_min, niw, S_val, U=None, q_path=None
     e_k = finer_bz.e_k
     Nk = len(e_k)
     S_iwk, k_dep = get_iwk_arr(S_val, Nk, niw)
-    
-    start = q_min - fit_range
-    stop = q_min + fit_range
-    
-    if not fit_grid_pts:
-    
-        q_grid = np.linspace(start, stop, fit_pts)
 
-        if finer_bz.ibz:
-            e_k = finer_bz.unfold_f_k(e_k)
-            if k_dep:
-                S_iwk = finer_bz.unfold_f_iwk(S_iwk)
-
-        chi_grid = np.zeros(fit_pts)
-        for iq, q in enumerate(q_grid):
-            e_kq = get_e_kq(e_k, q, nk, method='fft', R_vecs=lat.R_vecs, t_vals=lat.t_vals)
-
-            if niw == 1:
-                chi0 = lindhard_ksp(mu, beta, e_k, e_kq)
-            else:
-                if k_dep:
-                    S_iwkq = get_f_iwkq(S_iwk, q, nk)
-                else:
-                    S_iwkq = S_iwk
-
-                chi0 = matsubara_ksp(mu, beta, e_k, e_kq, S_iwk, S_iwkq)
-            chi_grid[iq] = chi0/(1 - U*chi0)
-    
+    if q_path is not None:
+        q_grid, _ = get_grid_from_path(q_path, bz.k_vecs)
+        k_grid = q_grid * np.pi
     else:
+        k_grid = bz.k_vecs
 
-        if q_path is not None:
-            q_grid, _ = get_grid_from_path(q_path, bz.k_vecs)
-            k_grid = q_grid * np.pi
-        else:
-            k_grid = bz.k_vecs
-    
-        q_path = (start, stop)
-        q_grid, path_mask = get_grid_from_path(q_path, k_grid)
-        chi_grid = 1/np.asarray(invchi_grid[path_mask])
-
-    e_hat = (stop - start)
-    e_hat /= np.linalg.norm(e_hat)
-    s_grid = q_grid @ e_hat
-    s0 = q_min @ e_hat  
-    
-    if p0 is None or np.isnan(p0[0]):
-        a0 = 16*fit_range[-1]
-        invxi0 = abs(1/chi_grid[len(chi_grid)//2])
-        p0 = [a0, 0., invxi0]
-        
-    bounds = ([0., -5, 0.], [np.inf, 5, np.inf])
-
-    if fit_qmin:
-        p0.append(s0)
-        bounds[0].append(s0 - 4/nk)
-        bounds[1].append(s0 + 4/nk)
-        OZ_fit = OZ
-    else:
-        OZ_fit = lambda s, a, b, invxi: OZ(s, a, b, invxi, s0)
+    s0, s_grid, chi_grid = sub_grid(q_min, [0,0,5/nk], k_grid, invchi_grid)
+    p0 = [10., min(1/chi_grid)]
+    bounds = ([0., 0.], [np.inf, np.inf])
 
     try:
-        par, _ = curve_fit(OZ_fit, s_grid, chi_grid, p0=p0, bounds=bounds, maxfev=100000)
-        if fit_qmin:
-            new_q_min = q_min - (q_min @ e_hat)*e_hat + par[3]*e_hat
-        else:
-            new_q_min = np.array([np.nan]*len(q_min))
-            par = np.append(par, s0)
+        OZ_s0 = lambda s, a, c: OZ(s, a, 0., c, s0)
+        par, _ = curve_fit(OZ_s0, s_grid, chi_grid, p0=p0, bounds=bounds, maxfev=100000)
     
     except RuntimeError:
-        par = np.array([np.nan]*4)
-        new_q_min = np.array([np.nan]*len(q_min))
+        par = p0
 
-    return par, new_q_min
+    if fit_range is None:
+        z_range = 0.05/np.sqrt(par[0])
+        min_range = 5/nk if fit_grid_pts else 5e-4
+        fit_range = [0, 0, min(max(min_range, z_range), 1e-1)]
+
+    max_repeat = 10
+    for iter in range(max_repeat):
+
+        if not fit_grid_pts:
+
+            start = q_min - fit_range
+            stop = q_min + fit_range
+        
+            q_grid = np.linspace(start, stop, fit_pts)
+
+            if finer_bz.ibz:
+                e_k = finer_bz.unfold_f_k(e_k)
+                if k_dep:
+                    S_iwk = finer_bz.unfold_f_iwk(S_iwk)
+
+            chi_grid = np.empty(fit_pts)
+            for iq, q in enumerate(q_grid):
+                e_kq = get_e_kq(e_k, q, nk, method='fft', R_vecs=lat.R_vecs, t_vals=lat.t_vals)
+
+                if niw == 1:
+                    chi0 = lindhard_ksp(mu, beta, e_k, e_kq)
+                else:
+                    if k_dep:
+                        S_iwkq = get_f_iwkq(S_iwk, q, nk)
+                    else:
+                        S_iwkq = S_iwk
+
+                    chi0 = matsubara_ksp(mu, beta, e_k, e_kq, S_iwk, S_iwkq)
+                    chi0 += beta / (2*np.pi**2) * zeta(2, niw + 0.5)
+
+                chi_grid[iq] = chi0/(1 - U*chi0)
+
+        e_hat = (stop - start)
+        e_hat /= np.linalg.norm(e_hat)
+        s_grid = q_grid @ e_hat
+
+        par = list(par)
+
+        if iter == 0:
+            par.insert(1, 0.)
+            bounds[0].insert(1, -np.inf)
+            bounds[1].insert(1, np.inf)
+
+        if fit_qmin:
+            if iter == 0:
+                par.append(s0)
+                bounds[0].append(s0 - 4/nk)
+                bounds[1].append(s0 + 4/nk)
+            OZ_fit = OZ
+        else:
+            OZ_fit = lambda s, a, b, c: OZ(s, a, b, c, s0)
+
+        try:
+            par, _ = curve_fit(OZ_fit, s_grid, chi_grid, p0=par, bounds=bounds, maxfev=100000)
+            if fit_qmin:
+                new_q_min = q_min - (q_min @ e_hat)*e_hat + par[3]*e_hat
+            else:
+                new_q_min = np.array([np.nan]*len(q_min))
+                par = np.append(par, s0)
+        
+        except RuntimeError:
+            new_q_min = q_min
+
+        print(fit_range[-1], ' vs ', 0.2*par[0]/par[1])
+        z_range2 = 0.2*abs(par[0]/par[1])
+        if fit_range[-1] > z_range2 and z_range2 > 5e-4:
+            fit_range[-1] = z_range2
+            continue
+        else:
+            break
+
+    return par, new_q_min, fit_range
 
 def density_k(e_k, S_k, mu, beta, w_k):
 
@@ -781,7 +822,7 @@ def get_mu(e_k, n_goal, beta, niw=1, S_val=None, w_k=None, niw_extr=False):
     
     return brentq(f, a, b)
 
-def run_rpa(par, lat, bz, bz_fine=None, niw=1, S_val=None, q_path=None, method='fft', get_xi=True, xi_range=[0,0,1e-2], xi_pts=8, fit_grid_pts=True, always_fit_qmin=False, niw_fit=False, store_inputs=True, verbose=True, file_name=None):
+def run_rpa(par, lat, bz, bz_fine=None, niw=1, S_val=None, q_path=None, method='fft', get_xi=True, xi_range=None, xi_pts=8, fit_grid_pts=True, always_fit_qmin=False, niw_fit=False, store_inputs=True, verbose=True, file_name=None):
 
     # Stores every input inside a dictionary
     if store_inputs:
@@ -817,31 +858,11 @@ def run_rpa(par, lat, bz, bz_fine=None, niw=1, S_val=None, q_path=None, method='
             if verbose: print(f'U={U:.5g}, T={T:.5g}, n={n:.5g}: 1/xi estimation with OZ fit over chi(q)...', end='')
 
             fit_qmin = bz_fine is None or always_fit_qmin
-            #min_range = 1e-2# if (niw > 1 or np.shape(S_val)[0] > 1) else 5e-4
 
-            r'''
+            run_data['OZ_fit'], run_data['Q_fitted'], run_data['xi_range'] = fit_invxi(lat, bz, bz_fine, mu, 1/T, Q, niw, S_val,  invchi0_grid.real-U, U, q_path, xi_range, xi_pts, fit_grid_pts, fit_qmin)
 
-            a_prev = xi_range[-1]
-            a_curr = None
-            p0 = None
-            for _ in range(10):
-                if a_curr is not None:
-                    a_prev = a_curr
-
-                xi_range = [0, 0, min(max(a_prev/16, min_range), 0.1)]
-                run_data['OZ_fit'], run_data['Q_fitted'] = fit_invxi(lat, bz, bz_fine, mu, 1/T, Q, niw, S_val, U, q_path, invchi0_grid.real-U, xi_range, xi_pts, fit_grid_pts, fit_qmin, p0)
-                a_curr = run_data['OZ_fit'][0]
-                p0 = list(run_data['OZ_fit'][:-1])
-                p0[1] = 0.
-                if a_curr is not None and abs(a_curr - a_prev) < 0.1*abs(a_curr):
-                    break
-
-            run_data['xi_range'] = [0, 0, min(max(a_prev/16, min_range), 0.1)]
-            '''
-            run_data['OZ_fit'], run_data['Q_fitted'] = fit_invxi(lat, bz, bz_fine, mu, 1/T, Q, niw, S_val, U, q_path, invchi0_grid.real-U, xi_range, xi_pts, fit_grid_pts, fit_qmin)
-
-            invxi = run_data['OZ_fit'][2]
-            OZ_weight = run_data['OZ_fit'][0]
+            invxi = np.sqrt(run_data['OZ_fit'][2]/run_data['OZ_fit'][0])
+            OZ_weight = 1/run_data['OZ_fit'][0]
 
             if bz_fine is None and not np.isnan(run_data['Q_fitted'][0]):
                 Q = run_data['Q_fitted']
@@ -877,7 +898,7 @@ def run_rpa(par, lat, bz, bz_fine=None, niw=1, S_val=None, q_path=None, method='
     
     return run_data
           
-def sweep_rpa(par_list, lat, bz, bz_fine=None, niw=1, S_list=None, q_path=None, method='fft', get_xi=True, xi_range=[0,0,1e-2], xi_pts=8, fit_grid_pts=True, always_fit_qmin=False, fit=False, fit_type=HMM, niw_fit=False, file_name=None, verbose=True):
+def sweep_rpa(par_list, lat, bz, bz_fine=None, niw=1, S_list=None, q_path=None, method='fft', get_xi=True, xi_range=None, xi_pts=8, fit_grid_pts=True, always_fit_qmin=False, fit=False, fit_type=HMM, niw_fit=False, file_name=None, verbose=True):
 
     # Stores every input inside a dictionary
     sweep_data = {k: v for k, v in locals().items() if k != "par_list"}
