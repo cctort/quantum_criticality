@@ -9,6 +9,9 @@ import matplotlib.colors as mcolors
 import matplotlib.gridspec as gridspec
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes, mark_inset
 from fractions import Fraction
+import matplotlib.patches as patches
+from matplotlib import ticker
+from matplotlib.animation import FuncAnimation
 #mpl.rcParams['figure.dpi']=100
 
 mpl.rcParams.update({
@@ -127,6 +130,7 @@ def plot_chimin(data, peak_on_the='right'):
     ax[0].set_ylim(bottom=0.)
 
     fig.tight_layout()
+    fig.set_dpi(300)
     return fig
 
 def plot_scaling(data, x_exp=(1,1,1), fit=False, origin=True, right="OZ"):
@@ -150,7 +154,7 @@ def plot_scaling(data, x_exp=(1,1,1), fit=False, origin=True, right="OZ"):
     fig = plt.figure(figsize=(12, 6))
 
     outer_gs = gridspec.GridSpec(
-        1, 3 if right == "OZ" else 3,
+        1, 3,
         figure=fig,
         width_ratios=[1, 1, 1.1]
     )
@@ -186,13 +190,15 @@ def plot_scaling(data, x_exp=(1,1,1), fit=False, origin=True, right="OZ"):
         if fit and len(pos_idx[0]) > 2:
             ax_chi.set_xlim(left=0.95*T[pos_idx][0]**x_exp[0])
 
-    # --- Right: either OZ OR Q ---
+    # --- Right: OZ, Q, or mu ---
     if right == "OZ":
         right_rows = 1
     elif right == "Q":
         right_rows = dim
+    elif right == "mu":
+        right_rows = 1
     else:
-        raise ValueError("right must be 'OZ' or 'Q'")
+        raise ValueError("right must be 'OZ', 'Q', or 'mu'")
 
     right_gs = gridspec.GridSpecFromSubplotSpec(
         right_rows, 1, subplot_spec=outer_gs[2], hspace=0.1
@@ -201,6 +207,8 @@ def plot_scaling(data, x_exp=(1,1,1), fit=False, origin=True, right="OZ"):
 
     row = 0
 
+    fp_OZ_all = [None] * len(data['n'])  # needed later for xi fit, only populated if right == "OZ"
+
     if right == "OZ":
         ax_OZ = right_axes[row]
         ax_OZ.set_ylabel(r'$\mathcal{A}(T)$')
@@ -208,7 +216,6 @@ def plot_scaling(data, x_exp=(1,1,1), fit=False, origin=True, right="OZ"):
         ax_OZ.set_title(r'OZ weight')
         ax_OZ.grid()
 
-        fp_OZ_all = [None] * len(data['n'])
         for i, n in enumerate(data['n']):
             pos_idx = np.where(data['OZ_weight'][i] > 0)
             if fit and len(pos_idx[0]) > 2:
@@ -250,6 +257,32 @@ def plot_scaling(data, x_exp=(1,1,1), fit=False, origin=True, right="OZ"):
         right_axes[0].set_title(r'$\overline{\mathbf{q}}$ vector')
         right_axes[-1].set_xlabel('T')
 
+    elif right == "mu":
+        ax_mu = right_axes[row]
+        ax_mu.set_ylabel(r'$\mu(T,n)$')
+        ax_mu.set_xlabel(x_axis_label(x_exp[2]))
+        ax_mu.set_title('Chemical potential')
+        ax_mu.grid()
+
+        for i, n in enumerate(data['n']):
+            idx = np.where(np.isfinite(data['mu'][i]))
+            if fit and len(idx[0]) > 2:
+                fp_mu = np.polyfit(T[idx][:15] ** x_exp[2],
+                                data['mu'][i][idx][:15], 1)
+                x0 = T[idx][0] ** x_exp[2]
+                ax_mu.axline((x0, x0 * fp_mu[0] + fp_mu[1]),
+                             slope=fp_mu[0], linestyle='--',
+                             color='black', linewidth=0.9)
+
+            ax_mu.plot(T ** x_exp[2], data['mu'][i],
+                       'o-', markersize=4, color=color_list[i],
+                       label=f'$n = {n}$')
+
+        if fit and len(idx[0]) > 2:
+            ax_mu.set_xlim(right=1.05*T[idx][-1]**x_exp[2])
+        if not origin and fit and len(idx[0]) > 2:
+            ax_mu.set_xlim(left=0.95*T[idx][0]**x_exp[2])
+
     for ax in right_axes[:-1]:
         ax.tick_params(axis='x', labelbottom=False)
     
@@ -262,7 +295,7 @@ def plot_scaling(data, x_exp=(1,1,1), fit=False, origin=True, right="OZ"):
 
     for i, n in enumerate(data['n']):
         pos_idx = np.where(data['invxi_min'][i] > 0)
-        if fit and fp_chi_all[i] is not None and fp_OZ_all[i] is not None:
+        if fit and right == "OZ" and fp_chi_all[i] is not None and fp_OZ_all[i] is not None:
             fp_chi, fp_OZ = fp_chi_all[i], fp_OZ_all[i]
             x_fit = np.linspace(0., 1.1 * T[pos_idx][-1], 1000)
             chi_times_OZ = (fp_chi[0] * x_fit**x_exp[0] + fp_chi[1]) * (fp_OZ[0]  * x_fit**x_exp[2] + fp_OZ[1])
@@ -282,18 +315,22 @@ def plot_scaling(data, x_exp=(1,1,1), fit=False, origin=True, right="OZ"):
             ax_xi.set_xlim(left=0.95*T[pos_idx][0]**x_exp[1])
     
     if origin:
-        for ax in [ax_chi, ax_xi] + [right_axes[0]] if right == "OZ" else []:
+        axes_to_zero = [ax_chi, ax_xi]
+        if right == "OZ":
+            axes_to_zero.append(right_axes[0])
+        for ax in axes_to_zero:
             ax.set_ylim(bottom=0.)
 
     fig.tight_layout()
+    fig.set_dpi(300)
     return fig
 
-def plot_diagram(data_list, var_list, var_plotlabel, inset_xrange=None, subplots='commens', c0=0):
+def plot_diagram(data_list, var_list, var_plotlabel, inset_xrange=None, inset_yrange=None, subplots='commens', c0=0):
 
     fig = plt.figure(figsize=(12, 6))
-    ax = [fig.add_subplot(1,2,1),
-          fig.add_subplot(2,2,2),
-          fig.add_subplot(2,2,4)]
+    ax = [fig.add_subplot(1, 2, 1),
+          fig.add_subplot(2, 2, 2),
+          fig.add_subplot(2, 2, 4)]
 
     for a in ax:
         a.grid()
@@ -308,7 +345,6 @@ def plot_diagram(data_list, var_list, var_plotlabel, inset_xrange=None, subplots
     elif subplots == 'scaling':
         ax[1].set_ylabel(r'$\gamma$')
         ax[2].set_ylabel(r'$\mathcal{A}(T_N)$')
-        ax[2].set_ylim(0, 0.2)
 
     ax[1].tick_params(axis='x', labelbottom=False)
     ax[0].set_xlabel(r'$n$')
@@ -340,7 +376,7 @@ def plot_diagram(data_list, var_list, var_plotlabel, inset_xrange=None, subplots
             y2 = data['mu_c']
         elif subplots == 'scaling':
             y1 = data['b']
-            y2 = -abs(data['cOZ']/data['aOZ'])**(1/data['bOZ']) * np.sign(data['cOZ']/data['aOZ'])
+            y2 = data['aOZ'] * np.maximum(Tc, 0.)**data['bOZ'] + data['cOZ']
 
         label = rf"${var_plotlabel}={var_list[i]}$"
 
@@ -362,27 +398,160 @@ def plot_diagram(data_list, var_list, var_plotlabel, inset_xrange=None, subplots
 
     ax[0].legend(loc='lower left')
     ax[0].set_ylim(0, 0.4)
+    if subplots == 'commens':
+        ax[1].set_ylim(top=1.)
+    elif subplots == 'scaling':
+        ax[1].set_ylim(bottom=0.)
+        ax[2].set_ylim(bottom=0.)
+        
     if axins is not None:
         xlo, xhi = sorted(inset_xrange)
 
-        ymin, ymax = np.inf, -np.inf
+        # Use explicit inset_yrange if passed, otherwise compute dynamic Y-limits
+        if inset_yrange is not None:
+            inset_ymin, inset_ymax = inset_yrange
+        else:
+            ymin, ymax = np.inf, -np.inf
 
-        for data in data_list:
-            n = data['n']
-            Tc = -abs(data['c']/data['a'])**(1/data['b']) * np.sign(data['c']/data['a'])
+            for data in data_list:
+                n = data['n']
+                Tc = -abs(data['c']/data['a'])**(1/data['b']) * np.sign(data['c']/data['a'])
 
-            mask = (n >= xlo) & (n <= xhi)
-            idx = np.where(mask)[0]
+                mask = (n >= xlo) & (n <= xhi)
+                idx = np.where(mask)[0]
 
-            if idx.size:
-                i0 = max(idx[0] - 1, 0)
-                i1 = min(idx[-1] + 1, len(n) - 1)
+                if idx.size:
+                    i0 = max(idx[0] - 1, 0)
+                    i1 = min(idx[-1] + 1, len(n) - 1)
 
-                ymin = min(ymin, Tc[i0:i1+1].min())
-                ymax = max(ymax, Tc[i0:i1+1].max())
+                    valid_tc = Tc[i0:i1+1][np.isfinite(Tc[i0:i1+1])]
+                    if valid_tc.size > 0:
+                        ymin = min(ymin, valid_tc.min())
+                        ymax = max(ymax, valid_tc.max())
 
-        axins.set_ylim(max(ymin,0), ymax)
+            if np.isfinite(ymin) and np.isfinite(ymax) and ymin != ymax:
+                inset_ymin, inset_ymax = max(ymin, 0), ymax
+            else:
+                inset_ymin, inset_ymax = 0.0, 0.4
+
+        axins.set_ylim(inset_ymin, inset_ymax)
+
+        # --- Static 2D Highlight Box on ax[0] ---
+        highlight_box = patches.Rectangle(
+            (xlo, inset_ymin),
+            xhi - xlo,
+            inset_ymax - inset_ymin,
+            linewidth=1,
+            edgecolor='gray',
+            facecolor='gray',
+            alpha=0.2,
+            linestyle='--',
+            zorder=1
+        )
+        ax[0].add_patch(highlight_box)
 
     fig.tight_layout()
+    fig.set_dpi(300)
 
     return fig
+
+def smoothstep(t):
+    """Maps t in [0, 1] to a smooth S-curve (cubic acceleration/deceleration)."""
+    return t * t * (3 - 2 * t)
+
+def create_inset_transition(data_list, var_list, var_plotlabel, 
+                             range_start, range_end, 
+                             yrange_start=None, yrange_end=None, 
+                             frames=30, **kwargs):
+    
+    # 1. Initialize figure with starting range & high DPI
+    fig = plot_diagram(data_list, var_list, var_plotlabel, 
+                       inset_xrange=range_start, inset_yrange=yrange_start, **kwargs)
+    
+    ax0 = fig.axes[0]
+    axins = fig.axes[-1]  
+
+    # --- Setup Y-Range Sequence ---
+    if yrange_start is None or yrange_end is None:
+        full_xlo = min(min(range_start), min(range_end))
+        full_xhi = max(max(range_start), max(range_end))
+        
+        ymin, ymax = np.inf, -np.inf
+        for data in data_list:
+            n = np.asarray(data['n'])
+            Tc = -abs(data['c']/data['a'])**(1/data['b']) * np.sign(data['c']/data['a'])
+            
+            mask = (n >= full_xlo) & (n <= full_xhi)
+            idx = np.where(mask)[0]
+            if idx.size > 0:
+                i0 = max(idx[0] - 1, 0)
+                i1 = min(idx[-1] + 1, len(n) - 1)
+                valid_tc = Tc[i0:i1+1][np.isfinite(Tc[i0:i1+1])]
+                if valid_tc.size > 0:
+                    ymin = min(ymin, valid_tc.min())
+                    ymax = max(ymax, valid_tc.max())
+        
+        default_y = (max(ymin, 0), ymax) if np.isfinite(ymin) and np.isfinite(ymax) else (0.0, 0.4)
+        yrange_start = yrange_start or default_y
+        yrange_end = yrange_end or default_y
+
+    # --- Non-Linear Interpolation (Smoothstep) ---
+    t_linear = np.linspace(0, 1, frames)
+    t_eased = smoothstep(t_linear)
+
+    x1_seq = range_start[0] + (range_end[0] - range_start[0]) * t_eased
+    x2_seq = range_start[1] + (range_end[1] - range_start[1]) * t_eased
+    
+    y1_seq = yrange_start[0] + (yrange_end[0] - yrange_start[0]) * t_eased
+    y2_seq = yrange_start[1] + (yrange_end[1] - yrange_start[1]) * t_eased
+
+    # --- 2D Highlight Box on ax[0] ---
+    if ax0.patches:
+        highlight_box = ax0.patches[-1]
+    else:
+        initial_xmin = min(range_start)
+        initial_width = abs(range_start[1] - range_start[0])
+        initial_ymin = min(yrange_start)
+        initial_height = abs(yrange_start[1] - yrange_start[0])
+
+        highlight_box = patches.Rectangle(
+            (initial_xmin, initial_ymin),
+            initial_width,
+            initial_height,
+            linewidth=1, edgecolor='gray', facecolor='gray', alpha=0.2, linestyle='--', zorder=1
+        )
+        ax0.add_patch(highlight_box)
+
+    # --- Sparse Labeled Major Ticks + Unlabeled Minor Ticks ---
+    # Strictly limits text labels to at most 3 per axis
+    axins.xaxis.set_major_locator(ticker.MaxNLocator(nbins=3, steps=[1, 2, 5, 10]))
+    axins.yaxis.set_major_locator(ticker.MaxNLocator(nbins=3, steps=[1, 2, 5, 10]))
+
+    # Shows tick marks between labels without adding extra text
+    axins.xaxis.set_minor_locator(ticker.AutoMinorLocator(2))
+    axins.yaxis.set_minor_locator(ticker.AutoMinorLocator(2))
+
+    # --- Animation Frame Update ---
+    def update(frame):
+        x1, x2 = x1_seq[frame], x2_seq[frame]
+        y1, y2 = y1_seq[frame], y2_seq[frame]
+        
+        # 1. Update limits
+        axins.set_xlim(max(x1, x2), min(x1, x2))
+        axins.set_ylim(min(y1, y2), max(y1, y2))
+        
+        # 2. Update highlight box on ax[0]
+        curr_xmin = min(x1, x2)
+        curr_width = abs(x2 - x1)
+        curr_ymin = min(y1, y2)
+        curr_height = abs(y2 - y1)
+        
+        highlight_box.set_x(curr_xmin)
+        highlight_box.set_y(curr_ymin)
+        highlight_box.set_width(curr_width)
+        highlight_box.set_height(curr_height)
+
+        return [axins, highlight_box]
+
+    anim = FuncAnimation(fig, update, frames=frames, interval=50, blit=False)
+    return anim

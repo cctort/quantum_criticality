@@ -12,23 +12,24 @@ rank = comm.Get_rank()
 size = comm.Get_size()
 
 Gamma = 0.
-tp = 0.25
+tp = 0.
 lat = LATTICE(tp=tp)
-bz = share_bz(lat, nk=500, comm=comm)
-bz_fine = share_bz(lat, nk=1000, comm=comm)
+bz = share_bz(lat, nk=300, comm=comm)
+bz_fine = share_bz(lat, nk=600, comm=comm)
 #bz_fine = None
 
 coarse = np.linspace(0.73, 1., 24)
-fine = np.linspace(0.884, 0.89, 8)
-finer = np.linspace(fine[-3], fine[-2], 6)
+fine = np.linspace(coarse[13], coarse[14], 10)
+fine2 = np.linspace(coarse[1], coarse[3], 5)
+#finer = np.linspace(coarse[10], coarse[12], 5)
 #finer2 = np.linspace(coarse[12], coarse[13], 6)
 
-coarse = coarse[(coarse < fine[0]) | (coarse > fine[-1])]
-fine = fine[(fine < finer[0]) | (fine > finer[-1])]
+coarse = coarse[((coarse < fine[0]) | (coarse > fine[-1])) & ((coarse < fine2[0]) | (coarse > fine2[-1]))]
+#fine = fine[(fine < finer[0]) | (fine > finer[-1])]
 #fine = fine[((fine < finer[0]) | (fine > finer[-1])) & ((fine < finer2[0]) | (fine > finer2[-1]))]
 
-n_list = np.sort(np.concatenate([coarse, fine, finer]))
-T_list = np.linspace(0., 0.05, 50)
+n_list = np.sort(np.concatenate([coarse, fine, fine2]))
+T_list = np.linspace(0., 0.2, 50)
 U = 3
 
 file_name = f'G{Gamma:.5g}tp{tp:.5g}U{U:.5g}.h5'
@@ -42,15 +43,12 @@ if os.path.exists(f'data/diagram/{file_name}'):
 
             # Fill NaNs by linear interpolation
             mask = np.isnan(Tc)
-            Tc[mask] = np.interp(
-                np.flatnonzero(mask),
-                np.flatnonzero(~mask),
-                Tc[~mask]
-            )
+            Tc[mask] = np.interp(old_n[mask], old_n[~mask], Tc[~mask])
 
-            old_Tc = np.interp(n_list, ar['n'], Tc)
+            old_Tc = np.interp(n_list, old_n, Tc)
         else:
             old_Tc = np.zeros(len(n_list))
+        print(old_Tc)
 else:
     old_Tc = np.zeros(len(n_list))
 
@@ -63,8 +61,8 @@ print(f"rank {rank} got {len(my_jobs)} jobs")
 
 results_list = []
 for pars in my_jobs:
-    results_list.append(sweep_rpa(pars, lat, bz, bz_fine, q_path=([1,1,0.5],[1,1,1]), method='local', fit_grid_pts=False, verbose=False, xi_range=[0,0,1e-2], fit=True))
-    #results_list.append(sweep_rpa(pars, lat, bz, bz_fine, niw=512, method='fft', S_list=-1j*0.025, verbose=False, xi_range=[0,0,2e-2]))
+    results_list.append(sweep_rpa(pars, lat, bz, bz_fine, q_path=([1,1,0.5],[1,1,1]), method='local', fit_grid_pts=False, verbose=False, fit=True))
+    #results_list.append(sweep_rpa(pars, lat, bz, bz_fine, niw=512, method='fft', S_list=-1j*0.025, verbose=False))
 
 t1 = time.time()
 peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024

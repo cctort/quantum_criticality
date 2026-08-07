@@ -647,7 +647,17 @@ def fit_invxi(lat, bz, bz_fine, mu, beta, q_min, niw, S_val, invchi_grid, U, q_p
     else:
         k_grid = bz.k_vecs
 
-    s0, s_grid, chi_grid = sub_grid(q_min, [0,0,5/nk], k_grid, invchi_grid)
+    start = q_min - np.array([0, 0, 5/nk])
+    stop = q_min + np.array([0, 0, 5/nk])
+    
+    q_grid, path_mask = get_grid_from_path((start, stop), k_grid)
+    chi_grid = 1/np.asarray(invchi_grid[path_mask])
+
+    e_hat = (stop - start)
+    e_hat /= np.linalg.norm(e_hat)
+    s_grid = q_grid @ e_hat
+    s0 = q_min @ e_hat
+
     p0 = [10., min(1/chi_grid)]
     bounds = ([0., 0.], [np.inf, np.inf])
 
@@ -666,12 +676,11 @@ def fit_invxi(lat, bz, bz_fine, mu, beta, q_min, niw, S_val, invchi_grid, U, q_p
     max_repeat = 10
     for iter in range(max_repeat):
 
-        if not fit_grid_pts:
+        start = q_min - fit_range
+        stop = q_min + fit_range
+        q_grid = np.linspace(start, stop, fit_pts)
 
-            start = q_min - fit_range
-            stop = q_min + fit_range
-        
-            q_grid = np.linspace(start, stop, fit_pts)
+        if not fit_grid_pts:
 
             if finer_bz.ibz:
                 e_k = finer_bz.unfold_f_k(e_k)
@@ -721,18 +730,19 @@ def fit_invxi(lat, bz, bz_fine, mu, beta, q_min, niw, S_val, invchi_grid, U, q_p
                 new_q_min = q_min - (q_min @ e_hat)*e_hat + par[3]*e_hat
             else:
                 new_q_min = np.array([np.nan]*len(q_min))
-                par = np.append(par, s0)
         
         except RuntimeError:
             new_q_min = q_min
 
-        print(fit_range[-1], ' vs ', 0.2*par[0]/par[1])
         z_range2 = 0.2*abs(par[0]/par[1])
         if fit_range[-1] > z_range2 and z_range2 > 5e-4:
             fit_range[-1] = z_range2
             continue
         else:
             break
+
+    if not fit_qmin:
+        par = np.append(par, s0)
 
     return par, new_q_min, fit_range
 
