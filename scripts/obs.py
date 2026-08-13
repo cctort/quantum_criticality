@@ -963,8 +963,8 @@ def sweep_rpa(par_list, lat, bz, bz_fine=None, niw=1, S_list=None, q_path=None, 
 
             for label in labels_to_fit:
                 pos_mask = sweep_data[label] > 0
-                x_fit = np.array(varying_par)[pos_mask][:10]
-                y_fit = sweep_data[label][pos_mask][:10]
+                x_fit = np.array(varying_par)[pos_mask][:20]
+                y_fit = sweep_data[label][pos_mask][:20]
 
                 if len(x_fit) >= 2:
                     try:

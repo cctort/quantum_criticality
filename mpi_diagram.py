@@ -20,7 +20,7 @@ bz_fine = share_bz(lat, nk=600, comm=comm)
 
 coarse = np.linspace(0.73, 1., 24)
 fine = np.linspace(coarse[13], coarse[14], 10)
-fine2 = np.linspace(coarse[1], coarse[3], 5)
+fine2 = np.linspace(coarse[1], coarse[4], 10)
 #finer = np.linspace(coarse[10], coarse[12], 5)
 #finer2 = np.linspace(coarse[12], coarse[13], 6)
 
@@ -28,8 +28,8 @@ coarse = coarse[((coarse < fine[0]) | (coarse > fine[-1])) & ((coarse < fine2[0]
 #fine = fine[(fine < finer[0]) | (fine > finer[-1])]
 #fine = fine[((fine < finer[0]) | (fine > finer[-1])) & ((fine < finer2[0]) | (fine > finer2[-1]))]
 
-n_list = np.sort(np.concatenate([coarse, fine, fine2]))
-T_list = np.linspace(0., 0.2, 50)
+n_list = np.unique(np.concatenate([coarse, fine, fine2]))
+T_list = np.linspace(0., 0.15, 50)
 U = 3
 
 file_name = f'G{Gamma:.5g}tp{tp:.5g}U{U:.5g}.h5'
@@ -52,7 +52,14 @@ if os.path.exists(f'data/diagram/{file_name}'):
 else:
     old_Tc = np.zeros(len(n_list))
 
-par_list = [[{'U': U, 'n': n_list[i], 'T': T + max(old_Tc[i], 0.005)} for T in T_list] for i in range(len(n_list))]
+#new_T_list = T_list[:, np.newaxis] * (np.maximum(old_Tc[np.newaxis, :], 0.005)/0.005)**0.8 + np.maximum(old_Tc[np.newaxis, :], 0.005)
+new_T_list = T_list[:, np.newaxis] + np.maximum(old_Tc[np.newaxis, :], 0.005)
+
+par_list = [
+    [{'U': U, 'n': n_list[i], 'T': new_T_list[j, i]}
+     for j in range(len(T_list))]
+    for i in range(len(n_list))
+]
 
 my_jobs = par_list[rank::size]
 t0 = time.time()

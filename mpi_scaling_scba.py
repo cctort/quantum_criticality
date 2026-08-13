@@ -11,16 +11,20 @@ comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
 size = comm.Get_size()
 
+v = 0.1
 tp = 0.
 lat = LATTICE(tp=tp)
 bz = share_bz(lat, nk=500, comm=comm)
-bz_fine = None
+bz_fine = bz
 
-#n_list = np.linspace(0.785, 0.789, 5) # v = 0.1
-n_list = np.linspace(0.8368, 0.8378, 5) # v = 0.3
+#n_list = np.linspace(0.74, 0.76, 5) # v = 0.05
+#n_list = np.linspace(0.76, 0.78, 5) # v = 0.065
+#n_list = np.linspace(0.76, 0.78, 5) # v = 0.08
+#n_list = np.linspace(0.76, 0.78, 5) # v = 0.09
+n_list = np.linspace(0.785, 0.789, 5) # v = 0.1
+#n_list = np.linspace(0.8368, 0.8378, 5) # v = 0.3
 T_list = np.linspace(0.005, 0.015, 15)
 U = 3
-v = 0.3
 niw = 2048
 
 file_name = f'v{v:.5g}tp{tp:.5g}U{U:.5g}.h5'
@@ -48,8 +52,7 @@ for pars in my_jobs:
         scba_diff.append(scba_result['diff'])
         scba_converged.append(scba_result['converged'])
 
-    results = sweep_rpa(pars, lat, bz, bz_fine, niw=niw, method='fft',
-                         S_list=S_list, verbose=False, xi_range=[0, 0, 1e-2])
+    results = sweep_rpa(pars, lat, bz, bz_fine, niw=niw, method='fft', fit_grid_pts=False, fit=True, S_list=S_list, verbose=False)
 
     results['scba_diff'] = np.array(scba_diff)
     results['scba_converged'] = np.array(scba_converged)

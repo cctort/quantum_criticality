@@ -3,3 +3,4 @@ scripts/__pycache__
 log
 test*
 *.h5
+send.sh

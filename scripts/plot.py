@@ -376,7 +376,7 @@ def plot_diagram(data_list, var_list, var_plotlabel, inset_xrange=None, inset_yr
             y2 = data['mu_c']
         elif subplots == 'scaling':
             y1 = data['b']
-            y2 = data['aOZ'] * np.maximum(Tc, 0.)**data['bOZ'] + data['cOZ']
+            y2 = np.abs(data['aOZ'] * np.maximum(Tc, 0.)**data['bOZ'] + data['cOZ'])
 
         label = rf"${var_plotlabel}={var_list[i]}$"
 
@@ -402,7 +402,7 @@ def plot_diagram(data_list, var_list, var_plotlabel, inset_xrange=None, inset_yr
         ax[1].set_ylim(top=1.)
     elif subplots == 'scaling':
         ax[1].set_ylim(bottom=0.)
-        ax[2].set_ylim(bottom=0.)
+        ax[2].set_ylim(0., 8.)
         
     if axins is not None:
         xlo, xhi = sorted(inset_xrange)
