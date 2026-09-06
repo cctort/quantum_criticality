@@ -2,8 +2,8 @@
 #SBATCH --job-name=rpa
 #SBATCH --partition=bilbao
 #SBATCH --nodes=1
-#SBATCH --ntasks=21
-#SBATCH --cpus-per-task=3
+#SBATCH --ntasks=32
+#SBATCH --cpus-per-task=2
 #SBATCH --mem=500G
 #SBATCH --time=72:00:00
 #SBATCH --output=log/rpa_%j.out
@@ -19,7 +19,7 @@ export NUMBA_THREADING_LAYER=omp
 
 export PMIX_MCA_psec=native
 
-srun --mpi=pmix python mpi_run.py
+srun --mpi=pmix python mpi_diagram.py
 #py-spy record --native -o profile_native.svg --rate 20 --subprocesses -- python mpi_scaling.py
 #srun --mpi=pmix bash -c '
 #  memray run --aggregate -f -o memray_out/profile_rank${SLURM_PROCID}.bin -- mpi_scaling.py

@@ -675,13 +675,14 @@ def fit_invxi(lat, bz, bz_fine, mu, beta, q_min, niw, S_val, invchi_grid, U, q_p
 
     max_repeat = 10
     for iter in range(max_repeat):
-
         start = q_min - fit_range
-        stop = q_min + fit_range
-        q_grid = np.linspace(start, stop, fit_pts)
+        stop  = q_min + fit_range
 
-        if not fit_grid_pts:
-
+        if fit_grid_pts:
+            q_grid, path_mask = get_grid_from_path((start, stop), k_grid)
+            chi_grid = 1 / np.asarray(invchi_grid[path_mask])
+        else:
+            q_grid = np.linspace(start, stop, fit_pts)
             if finer_bz.ibz:
                 e_k = finer_bz.unfold_f_k(e_k)
                 if k_dep:
@@ -690,19 +691,13 @@ def fit_invxi(lat, bz, bz_fine, mu, beta, q_min, niw, S_val, invchi_grid, U, q_p
             chi_grid = np.empty(fit_pts)
             for iq, q in enumerate(q_grid):
                 e_kq = get_e_kq(e_k, q, nk, method='fft', R_vecs=lat.R_vecs, t_vals=lat.t_vals)
-
                 if niw == 1:
                     chi0 = lindhard_ksp(mu, beta, e_k, e_kq)
                 else:
-                    if k_dep:
-                        S_iwkq = get_f_iwkq(S_iwk, q, nk)
-                    else:
-                        S_iwkq = S_iwk
-
+                    S_iwkq = get_f_iwkq(S_iwk, q, nk) if k_dep else S_iwk
                     chi0 = matsubara_ksp(mu, beta, e_k, e_kq, S_iwk, S_iwkq)
                     chi0 += beta / (2*np.pi**2) * zeta(2, niw + 0.5)
-
-                chi_grid[iq] = chi0/(1 - U*chi0)
+                chi_grid[iq] = chi0 / (1 - U*chi0)
 
         e_hat = (stop - start)
         e_hat /= np.linalg.norm(e_hat)
