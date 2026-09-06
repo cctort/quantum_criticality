@@ -10,30 +10,35 @@ comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
 size = comm.Get_size()
 
-Gamma = 0.005
-tp = 0.
+Gamma = 0.
+tp = 0.2
 lat = LATTICE(tp=tp)
 bz = share_bz(lat, nk=500, comm=comm)
-#bz_fine = share_bz(lat, nk=1000, comm=comm)
+bz_fine = share_bz(lat, nk=1000, comm=comm)
 #bz_fine = None
-bz_fine = bz
+#bz_fine = bz
 
 #n_list = np.linspace(0.735, 0.755, 5)
 #n_list = np.linspace(0.846, 0.85, 5) # tp=0.1
-#n_list = np.linspace(0.884905, 0.884965, 5) # tp=0.2
-n_list = np.linspace(0.775, 0.785, 5) # Gamma=0.005
+n_list = np.linspace(0.884905, 0.884965, 5) # tp=0.2
+#n_list = np.linspace(0.775, 0.785, 5) # Gamma=0.005
 #n_list = np.linspace(0.795, 0.798, 5) # Gamma=0.01
 #n_list = np.linspace(0.805, 0.81, 5) # Gamma=0.015
-#n_list = np.linspace(0.814, 0.818, 5) # Gamma=0.02 - done, go up
+#n_list = np.linspace(0.814, 0.818, 5) # Gamma=0.02
 #n_list = np.linspace(0.835, 0.837, 5) # Gamma=0.035
 #n_list = np.linspace(0.8503, 0.8513, 5) # Gamma=0.05
 #n_list = np.linspace(0.8846, 0.8851, 5) # Gamma=0.1
+#n_list = np.linspace(0.85375, 0.85625, 5) # Gamma=0.005, tp=0.1
 #n_list = np.linspace(0.8598, 0.8608, 5) # Gamma=0.01, tp=0.1
+#n_list = np.linspace(0.864, 0.865, 5) # Gamma=0.015, tp=0.1
+#n_list = np.linspace(0.86775, 0.86875, 5) # Gamma=0.02, tp=0.1
 #n_list = np.linspace(0.8857, 0.8859, 5) # Gamma=0.05, tp=0.1
 #n_list = np.linspace(0.9055, 0.9056, 5) # Gamma=0.1, tp=0.1
+#n_list = np.linspace(0.88616, 0.88622, 5) # Gamma=0.005, tp=0.2
 #n_list = np.linspace(0.8874, 0.88744, 5) # Gamma=0.01, tp=0.2
+#n_list = np.linspace(0.88983, 0.88992, 5) # Gamma=0.02, tp=0.2
 #n_list = np.linspace(0.8975, 0.89754, 5) # Gamma=0.05, tp=0.2
-#T_list = np.linspace(0.005, 0.02, 20)
+#T_list = np.linspace(0.005, 0.02, 3)
 T_list = np.arange(0.005, 0.02, 0.00075)
 U = 3
 
@@ -48,8 +53,8 @@ print(f"rank {rank} got {len(my_jobs)} jobs")
 
 results_list = []
 for pars in my_jobs:
-    #results_list.append(sweep_rpa(pars, lat, bz, bz_fine, q_path=([1,1,0.5],[1,1,1]), method='local', fit_grid_pts=False, fit=True, verbose=False))
-    results_list.append(sweep_rpa(pars, lat, bz, bz_fine, niw=2048, method='fft', S_list=-1j*Gamma, fit_grid_pts=False, fit=True, verbose=False))
+    results_list.append(sweep_rpa(pars, lat, bz, bz_fine, q_path=([1,1,0.5],[1,1,1]), method='local', fit_grid_pts=False, fit=True, verbose=False))
+    #results_list.append(sweep_rpa(pars, lat, bz, bz_fine, niw=2048, method='fft', S_list=-1j*Gamma, fit_grid_pts=False, fit=True, verbose=False))
 
 t1 = time.time()
 peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024

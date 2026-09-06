@@ -11,19 +11,23 @@ comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
 size = comm.Get_size()
 
-v = 0.1
-tp = 0.
+v = 0.25
+tp = 0.1
 lat = LATTICE(tp=tp)
 bz = share_bz(lat, nk=500, comm=comm)
 bz_fine = bz
 
-#n_list = np.linspace(0.74, 0.76, 5) # v = 0.05
-#n_list = np.linspace(0.76, 0.78, 5) # v = 0.065
-#n_list = np.linspace(0.76, 0.78, 5) # v = 0.08
-#n_list = np.linspace(0.76, 0.78, 5) # v = 0.09
-n_list = np.linspace(0.785, 0.789, 5) # v = 0.1
+#n_list = np.linspace(0.782, 0.786, 5) # v = 0.1
+#n_list = np.linspace(0.795, 0.801, 5) # v = 0.15
+#n_list = np.linspace(0.809, 0.813, 5) # v = 0.2
+#n_list = np.linspace(0.8225, 0.8265, 5) # v = 0.25
+#n_list = np.linspace(0.853, 0.855, 5) # v = 0.1, tp = 0.1
+#n_list = np.linspace(0.8583, 0.8598, 5) # v = 0.15, tp = 0.1
+#n_list = np.linspace(0.863, 0.865, 5) # v = 0.2, tp = 0.1
+n_list = np.linspace(0.87, 0.8707, 5) # v = 0.25, tp = 0.1
 #n_list = np.linspace(0.8368, 0.8378, 5) # v = 0.3
-T_list = np.linspace(0.005, 0.015, 15)
+T_list = np.arange(0.005, 0.02, 0.00075)
+#T_list = np.linspace(0.005, 0.02, 3)
 U = 3
 niw = 2048
 

@@ -12,27 +12,45 @@ from fractions import Fraction
 import matplotlib.patches as patches
 from matplotlib import ticker
 from matplotlib.animation import FuncAnimation
-#mpl.rcParams['figure.dpi']=100
-
-mpl.rcParams.update({
-    "text.usetex": True,
-    "font.family": "serif",
-    "font.size": 16,
-    "axes.labelsize": 18,
-    "axes.titlesize": 18,
-    "xtick.labelsize": 16,
-    "ytick.labelsize": 16,
-    "legend.fontsize": 14,
-    "figure.titlesize": 20,
-})
 
 import seaborn as sns
 color_list = sns.color_palette('colorblind') + sns.color_palette("Set2") + sns.color_palette("Set3")
 
+def update_mpl_params(bigger_labels=0):
+    mpl.rcParams.update({
+        "text.usetex": True,
+        "font.family": "serif",
+        "font.size": 16+bigger_labels,
+        "axes.labelsize": 18+bigger_labels,
+        "axes.titlesize": 18+bigger_labels,
+        "xtick.labelsize": 16+bigger_labels,
+        "ytick.labelsize": 16+bigger_labels,
+        "legend.fontsize": 12,
+        "figure.titlesize": 20+3*bigger_labels//2,
+    })
 
-def plot_chimin(data, peak_on_the='right'):
+def fmt_sci(val):
+    """Formats floats into clean LaTeX math notation without surrounding $ signs."""
+    if val == 0:
+        return "0"
 
-    fig = plt.figure(figsize=(12, 6))
+    # Split e-notation and strip trailing zeros/decimals
+    mantissa, exp = f"{float(val):.6e}".split("e")
+    mantissa = mantissa.rstrip("0").rstrip(".")
+    exp_int = int(exp)
+
+    if exp_int == 0:
+        return mantissa
+    if mantissa == "1":
+        return f"10^{{{exp_int}}}"
+
+    return rf"{mantissa} \times 10^{{{exp_int}}}"
+
+def plot_chimin(data, peak_on_the='right', bigger_labels=0, figsize=(12, 6), plot_every=4):
+
+    update_mpl_params(bigger_labels)
+
+    fig = plt.figure(figsize=figsize)
     gs = fig.add_gridspec(1, 2, width_ratios=[2, 1])
 
     ax = [fig.add_subplot(gs[0, 0]), fig.add_subplot(gs[0, 1])]
@@ -70,10 +88,9 @@ def plot_chimin(data, peak_on_the='right'):
 
     for i, T in enumerate(data['T']):
 
-        plot_every = 4
         if i % plot_every == 0:
 
-            ax[0].plot(qz_grid, data['invchi'][i], 'o-', markersize=2, label=f'T={T:.4g}', color=color_list[i//plot_every], zorder=-i)
+            ax[0].plot(qz_grid, data['invchi'][i], 'o-', markersize=2, label=f'T={T:.6g}', color=color_list[i//plot_every], zorder=-i)
 
             qz_grid_fitted = np.linspace(Qz_fit[i]-data['xi_range'][i][-1], Qz_fit[i]+data['xi_range'][i][-1], 20)
 
@@ -104,7 +121,7 @@ def plot_chimin(data, peak_on_the='right'):
 
     axins.grid(True)
     axins.tick_params(labelsize=15)
-    axins.legend(loc='upper right', fontsize=12)
+    axins.legend(loc='upper right', fontsize=10)
 
     xlim = max(1e-2, 2*data['xi_range'][0][-1])
     mask = np.abs(qz_grid - Qz_ref[0]) < xlim
@@ -133,8 +150,8 @@ def plot_chimin(data, peak_on_the='right'):
     fig.set_dpi(300)
     return fig
 
-def plot_scaling(data, x_exp=(1,1,1), fit=False, origin=True, right="OZ"):
-    
+def plot_scaling(data, x_exp=(1,1,1), fit=False, origin=True, right="OZ", c0=0, bigger_labels=0, figsize=(12, 6)):
+
     T = data['T']
     dim = data['lat']['dim']
 
@@ -151,7 +168,9 @@ def plot_scaling(data, x_exp=(1,1,1), fit=False, origin=True, right="OZ"):
 
         return rf'$T^{{{frac.numerator}/{frac.denominator}}}$'
     
-    fig = plt.figure(figsize=(12, 6))
+    update_mpl_params(bigger_labels)
+
+    fig = plt.figure(figsize=figsize)
 
     outer_gs = gridspec.GridSpec(
         1, 3,
@@ -168,27 +187,27 @@ def plot_scaling(data, x_exp=(1,1,1), fit=False, origin=True, right="OZ"):
 
     fp_chi_all = [None] * len(data['n'])
     for i, n in enumerate(data['n']):
-        pos_idx = np.where(data['invchi_min'][i] > 0)
+        pos_idx = np.where(data['invchi_min'][i][:6] > 0)
         if fit and len(pos_idx[0]) > 2:
-            fp_chi = np.polyfit(T[pos_idx][:15] ** x_exp[0],
-                            data['invchi_min'][i][pos_idx][:15], 1)
+            fp_chi = np.polyfit(T[pos_idx] ** x_exp[0],
+                            data['invchi_min'][i][pos_idx], 1)
             fp_chi_all[i] = fp_chi
             x0 = T[pos_idx][0] ** x_exp[0]
             ax_chi.axline((x0, x0 * fp_chi[0] + fp_chi[1]),
                           slope=fp_chi[0], linestyle='--',
-                          color='black', linewidth=0.9)
+                          color='black', linewidth=0.9, zorder=-1)
 
         ax_chi.plot(T ** x_exp[0], data['invchi_min'][i], 'o-',
-                     markersize=4, color=color_list[i], label=f'$n = {n:.5g}$')
+                     markersize=4, color=color_list[i+c0], label=f'$n = {n:.6g}$')
         
     ax_chi.legend()
     if fit and len(pos_idx[0]) > 2:
-        ax_chi.set_xlim(right=1.05*T[pos_idx][-1]**x_exp[0])
+        ax_chi.set_xlim(right=1.05*T[-1]**x_exp[0])
     if origin:
         ax_chi.set_xlim(left=0.)
     else:
         if fit and len(pos_idx[0]) > 2:
-            ax_chi.set_xlim(left=0.95*T[pos_idx][0]**x_exp[0])
+            ax_chi.set_xlim(left=0.95*T[0]**x_exp[0])
 
     # --- Right: OZ, Q, or mu ---
     if right == "OZ":
@@ -217,10 +236,10 @@ def plot_scaling(data, x_exp=(1,1,1), fit=False, origin=True, right="OZ"):
         ax_OZ.grid()
 
         for i, n in enumerate(data['n']):
-            pos_idx = np.where(data['OZ_weight'][i] > 0)
+            pos_idx = np.where(data['OZ_weight'][i][:6] > 0)
             if fit and len(pos_idx[0]) > 2:
-                fp_OZ = np.polyfit(T[pos_idx][:15] ** x_exp[2],
-                                data['OZ_weight'][i][pos_idx][:15], 1)
+                fp_OZ = np.polyfit(T[pos_idx] ** x_exp[2],
+                                data['OZ_weight'][i][pos_idx], 1)
                 fp_OZ_all[i] = fp_OZ
                 x0 = T[pos_idx][0] ** x_exp[2]
                 ax_OZ.axline((x0, x0 * fp_OZ[0] + fp_OZ[1]),
@@ -228,16 +247,16 @@ def plot_scaling(data, x_exp=(1,1,1), fit=False, origin=True, right="OZ"):
                              color='black', linewidth=0.9)
 
             ax_OZ.plot(T ** x_exp[2], data['OZ_weight'][i],
-                       'o-', markersize=4, color=color_list[i],
+                       'o-', markersize=4, color=color_list[i+c0],
                        label=f'$n = {n}$')
 
         if fit and len(pos_idx[0]) > 2:
-            ax_OZ.set_xlim(right=1.05*T[pos_idx][-1]**x_exp[2])
+            ax_OZ.set_xlim(right=1.05*T[-1]**x_exp[2])
         if origin:
             ax_OZ.set_xlim(left=0.)
         else:
             if fit and len(pos_idx[0]) > 2:
-                ax_OZ.set_xlim(left=0.95*T[pos_idx][0]**x_exp[2])
+                ax_OZ.set_xlim(left=0.95*T[0]**x_exp[2])
 
     elif right == "Q":
         Q_label = [r'$\overline{q}_x/\pi$', r'$\overline{q}_y/\pi$', r'$\overline{q}_z/\pi$']
@@ -252,7 +271,7 @@ def plot_scaling(data, x_exp=(1,1,1), fit=False, origin=True, right="OZ"):
             for i, n in enumerate(data['n']):
                 ax.plot(T, data['Q'][i, :, d],
                         'o-', markersize=4,
-                        color=color_list[i])
+                        color=color_list[i+c0])
 
         right_axes[0].set_title(r'$\overline{\mathbf{q}}$ vector')
         right_axes[-1].set_xlabel('T')
@@ -275,7 +294,7 @@ def plot_scaling(data, x_exp=(1,1,1), fit=False, origin=True, right="OZ"):
                              color='black', linewidth=0.9)
 
             ax_mu.plot(T ** x_exp[2], data['mu'][i],
-                       'o-', markersize=4, color=color_list[i],
+                       'o-', markersize=4, color=color_list[i+c0],
                        label=f'$n = {n}$')
 
         if fit and len(idx[0]) > 2:
@@ -301,10 +320,10 @@ def plot_scaling(data, x_exp=(1,1,1), fit=False, origin=True, right="OZ"):
             chi_times_OZ = (fp_chi[0] * x_fit**x_exp[0] + fp_chi[1]) * (fp_OZ[0]  * x_fit**x_exp[2] + fp_OZ[1])
             xi_fit = np.sqrt(np.abs(chi_times_OZ)) * np.sign(chi_times_OZ)
             ax_xi.plot(x_fit**x_exp[1], xi_fit, linestyle='--',
-                       color='black', linewidth=0.9)
+                       color='black', linewidth=0.9, zorder=-1)
 
         ax_xi.plot(T ** x_exp[1], data['invxi_min'][i], 'o-',
-                   markersize=4, color=color_list[i])
+                   markersize=4, color=color_list[i+c0])
     
     if fit and len(pos_idx[0]) > 2:
         ax_xi.set_xlim(right=1.05*T[pos_idx][-1]**x_exp[1])
@@ -325,9 +344,10 @@ def plot_scaling(data, x_exp=(1,1,1), fit=False, origin=True, right="OZ"):
     fig.set_dpi(300)
     return fig
 
-def plot_diagram(data_list, var_list, var_plotlabel, inset_xrange=None, inset_yrange=None, subplots='commens', c0=0):
+def plot_diagram(data_list, var_list, var_plotlabel, inset_xrange=None, inset_yrange=None, subplots='commens', c0=0, bigger_labels=0, figsize=(12, 6)):
 
-    fig = plt.figure(figsize=(12, 6))
+    update_mpl_params(bigger_labels)
+    fig = plt.figure(figsize=figsize)
     ax = [fig.add_subplot(1, 2, 1),
           fig.add_subplot(2, 2, 2),
           fig.add_subplot(2, 2, 4)]
