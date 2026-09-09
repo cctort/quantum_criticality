@@ -19,36 +19,39 @@ bz = share_bz(lat, nk=100, comm=comm)
 bz_fine = bz
 
 coarse = np.linspace(0.73, 1., 24)
-fine = np.linspace(coarse[13], coarse[14], 10)
-#fine2 = np.linspace(coarse[1], coarse[4], 10)
+fine = np.linspace(coarse[13], coarse[14], 6)
+fine2 = np.linspace(coarse[9], coarse[11], 8)
 #finer = np.linspace(coarse[10], coarse[12], 5)
 #finer2 = np.linspace(coarse[12], coarse[13], 6)
 
-#coarse = coarse[((coarse < fine[0]) | (coarse > fine[-1])) & ((coarse < fine2[0]) | (coarse > fine2[-1]))]
+coarse = coarse[((coarse < fine[0]) | (coarse > fine[-1])) & ((coarse < fine2[0]) | (coarse > fine2[-1]))]
 #fine = fine[(fine < finer[0]) | (fine > finer[-1])]
 #fine = fine[((fine < finer[0]) | (fine > finer[-1])) & ((fine < finer2[0]) | (fine > finer2[-1]))]
 
-n_list = np.unique(np.concatenate([coarse, fine]))
+n_list = np.unique(np.concatenate([coarse, fine, fine2]))
 T_list = np.linspace(0., 0.1, 10)
 U = 3
 
-file_name = f'tp{tp:.5g}U{U:.5g}.h5'
+file_name = f'G{Gamma:.5g}tp{tp:.5g}U{U:.5g}.h5'
 
 if os.path.exists(f'data/diagram/{file_name}'):
-    with HDFArchive(f'data/diagram/{file_name}', "r") as ar:
-        if ar['fit'] is True:
-            old_n = ar['n']
+    try:
+        with HDFArchive(f'data/diagram/{file_name}', "r") as ar:
+            if ar['fit'] is True:
+                old_n = ar['n']
 
-            Tc = - abs(ar['c']/ar['a'])**(1/ar['b']) * np.sign(ar['c']/ar['a'])
+                Tc = - abs(ar['c']/ar['a'])**(1/ar['b']) * np.sign(ar['c']/ar['a'])
 
-            # Fill NaNs by linear interpolation
-            mask = np.isnan(Tc)
-            Tc[mask] = np.interp(old_n[mask], old_n[~mask], Tc[~mask])
+                # Fill NaNs by linear interpolation
+                mask = np.isnan(Tc)
+                Tc[mask] = np.interp(old_n[mask], old_n[~mask], Tc[~mask])
 
-            old_Tc = np.interp(n_list, old_n, Tc)
-        else:
-            old_Tc = np.zeros(len(n_list))
-        print(old_Tc)
+                old_Tc = np.interp(n_list, old_n, Tc)
+            else:
+                old_Tc = np.zeros(len(n_list))
+            print(old_Tc)
+    except Exception:
+        old_Tc = np.zeros(len(n_list))
 else:
     old_Tc = np.zeros(len(n_list))
 
@@ -75,16 +78,37 @@ t1 = time.time()
 peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
 print(f"rank {rank} finished {len(my_jobs)} jobs in {t1 - t0:.2f} s | peak RAM = {peak:.1f} MB")
 
-gathered = comm.gather(results_list, root=0)
-
 if rank == 0:
+    all_results = list(results_list)
+    
+    for src in range(1, size):
+        num_jobs_for_rank = len(par_list[src::size])
+        for _ in range(num_jobs_for_rank):
+            res = comm.recv(source=src, tag=101)
+            all_results.append(res)
 
-    flattened = [r for sublist in gathered for r in sublist]
+    flattened = []
+    for item in all_results:
+        if isinstance(item, list):
+            flattened.extend(item)
+        else:
+            flattened.append(item)
 
     flattened.sort(key=lambda d: d['n'])
     merged = merge_results(flattened)
 
-    print(f"writing results to {f'G{Gamma:.5g}tp{tp:.5g}U{U:.5g}.h5'}")
-    with HDFArchive(f'data/diagram/{f'G{Gamma:.5g}tp{tp:.5g}U{U:.5g}.h5'}', "w") as ar:
-        for key, value in merged.items():
-            ar[key] = value
+    print(f"writing results to {file_name}")
+
+    try:
+        with HDFArchive(file_name, "w") as ar:
+            for key, value in merged.items():
+                ar[key] = value
+        print("Successfully written and closed HDF5 file.")
+    except Exception as e:
+        print(f"CRITICAL ERROR during HDF5 write/flush: {e}")
+
+else:
+    for res in results_list:
+        comm.send(res, dest=0, tag=101)
+
+comm.Barrier()

@@ -6,6 +6,7 @@ from scripts.lattice import LATTICE, share_bz
 from scripts.utils import merge_results
 from h5 import HDFArchive
 import time, resource
+import os
 
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
@@ -52,6 +53,8 @@ print(f"rank {rank} finished {len(my_jobs)} jobs in {t1 - t0:.2f} s | peak RAM =
 
 gathered = comm.gather(results_list, root=0)
 
+comm.Barrier()
+
 if rank == 0:
     flattened = [r for sublist in gathered for r in sublist]
     flattened.sort(key=lambda d: d['T'])
@@ -59,7 +62,15 @@ if rank == 0:
                                         'OZ_weight', 'Q_fitted', 'mu',
                                         'scba_diff', 'scba_converged'])
 
+    out_file = f'data/chimin/{file_name}'
     print(f"writing results to {file_name}")
-    with HDFArchive(f'data/chimin/{file_name}', "w") as ar:
-        for key, value in merged.items():
-            ar[key] = value
+
+    os.makedirs(os.path.dirname(out_file), exist_ok=True)
+
+    try:
+        with HDFArchive(out_file, "w") as ar:
+            for key, value in merged.items():
+                ar[key] = value
+        print("Successfully written and closed HDF5 file.")
+    except Exception as e:
+        print(f"CRITICAL ERROR during HDF5 write/flush: {e}")

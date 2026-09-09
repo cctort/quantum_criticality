@@ -5,13 +5,14 @@ from scripts.utils import merge_results
 from h5 import HDFArchive
 from mpi4py import MPI
 import time, resource
+import os
 
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
 size = comm.Get_size()
 
 Gamma = 0.
-tp = 0.2
+tp = 0.1
 lat = LATTICE(tp=tp)
 bz = share_bz(lat, nk=500, comm=comm)
 bz_fine = share_bz(lat, nk=1000, comm=comm)
@@ -19,8 +20,8 @@ bz_fine = share_bz(lat, nk=1000, comm=comm)
 #bz_fine = bz
 
 #n_list = np.linspace(0.735, 0.755, 5)
-#n_list = np.linspace(0.846, 0.85, 5) # tp=0.1
-n_list = np.linspace(0.884905, 0.884965, 5) # tp=0.2
+n_list = np.linspace(0.846, 0.85, 5) # tp=0.1
+#n_list = np.linspace(0.884905, 0.884965, 5) # tp=0.2
 #n_list = np.linspace(0.775, 0.785, 5) # Gamma=0.005
 #n_list = np.linspace(0.795, 0.798, 5) # Gamma=0.01
 #n_list = np.linspace(0.805, 0.81, 5) # Gamma=0.015
@@ -53,7 +54,7 @@ print(f"rank {rank} got {len(my_jobs)} jobs")
 
 results_list = []
 for pars in my_jobs:
-    results_list.append(sweep_rpa(pars, lat, bz, bz_fine, q_path=([1,1,0.5],[1,1,1]), method='local', fit_grid_pts=False, fit=True, verbose=False))
+    results_list.append(sweep_rpa(pars, lat, bz, bz_fine, q_path=([1,1,0.5],[1,1,1]), method='local', fit_grid_pts=False, fit=True, xi_range=[1,1,5e-3], verbose=False))
     #results_list.append(sweep_rpa(pars, lat, bz, bz_fine, niw=2048, method='fft', S_list=-1j*Gamma, fit_grid_pts=False, fit=True, verbose=False))
 
 t1 = time.time()
@@ -62,6 +63,8 @@ print(f"rank {rank} finished {len(my_jobs)} jobs in {t1 - t0:.2f} s | peak RAM =
 
 gathered = comm.gather(results_list, root=0)
 
+comm.Barrier()
+
 if rank == 0:
 
     flattened = [r for sublist in gathered for r in sublist]
@@ -69,7 +72,15 @@ if rank == 0:
     flattened.sort(key=lambda d: d['n'])
     merged = merge_results(flattened)
 
+    out_file = f'data/scaling/{file_name}'
     print(f"writing results to {file_name}")
-    with HDFArchive(f'data/scaling/{file_name}', "w") as ar:
-        for key, value in merged.items():
-            ar[key] = value
+
+    os.makedirs(os.path.dirname(out_file), exist_ok=True)
+
+    try:
+        with HDFArchive(out_file, "w") as ar:
+            for key, value in merged.items():
+                ar[key] = value
+        print("Successfully written and closed HDF5 file.")
+    except Exception as e:
+        print(f"CRITICAL ERROR during HDF5 write/flush: {e}")

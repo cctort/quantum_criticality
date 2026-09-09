@@ -16,6 +16,7 @@ from matplotlib.lines import Line2D
 
 import seaborn as sns
 color_list = sns.color_palette('colorblind') + sns.color_palette("Set2") + sns.color_palette("Set3")
+#color_list = [color_list[0], color_list[9], color_list[5]]
 
 def update_mpl_params(bigger_labels=0):
     mpl.rcParams.update({
@@ -39,6 +40,7 @@ def plot_chimin(data, peak_on_the='right', bigger_labels=0, figsize=(12, 6), plo
 
     ax = [fig.add_subplot(gs[0, 0]), fig.add_subplot(gs[0, 1])]
 
+    ax[0].set_title('Susceptibility peak')
     ax[0].set_xlabel('$q_z/\pi$')
     ax[0].set_ylabel(r'$\chi^{-1}_m(\pi,\pi,q_z)$')
 
@@ -74,7 +76,7 @@ def plot_chimin(data, peak_on_the='right', bigger_labels=0, figsize=(12, 6), plo
 
         if i % plot_every == 0:
 
-            ax[0].plot(qz_grid, data['invchi'][i], 'o-', markersize=2, label=f'T={T:.6g}', color=color_list[i//plot_every], zorder=-i)
+            ax[0].plot(qz_grid, data['invchi'][i], 'o-', markersize=2, label=f'$T={T:.6g}$', color=color_list[i//plot_every], zorder=-i)
 
             qz_grid_fitted = np.linspace(Qz_fit[i]-data['xi_range'][i][-1], Qz_fit[i]+data['xi_range'][i][-1], 20)
 
@@ -86,7 +88,7 @@ def plot_chimin(data, peak_on_the='right', bigger_labels=0, figsize=(12, 6), plo
                 ax[0].plot(Qz_ref[i], data['invchi_min'][i], '*', markersize=2, color='indianred', zorder=-i)
 
             if i == 0:
-                label1 = 'from OZ fit'
+                label1 = 'OZ fit'
                 label2 = 'L-BFGS-B'
             else:
                 label1 = None
@@ -98,14 +100,18 @@ def plot_chimin(data, peak_on_the='right', bigger_labels=0, figsize=(12, 6), plo
 
             axins.plot(qz_grid_fitted, OZ_curve, ':', color='black', linewidth=1.2, zorder=1)
 
-            axins.scatter(Qz_fit[i], 1/OZ(Qz_fit[i], *data['OZ_fit'][i]), marker='x', s=30, linewidths=1.8, color='black', label=label1, zorder=2)
+            axins.scatter(Qz_fit[i], 1/OZ(Qz_fit[i], *data['OZ_fit'][i]), marker='x', s=30, linewidths=1.8, color='black', zorder=2)
+
+            axins.plot([0], [0], 'x:', label=label1, 
+                            color='black', markersize=6, markeredgewidth=1.8, 
+                            linewidth=1.4)
 
             if isinstance(data['bz_fine'], dict):
                 axins.scatter(Qz_ref[i], data['invchi_min'][i], marker='*', s=20, linewidths=1.8, color='indianred', label=label2, zorder=3)
 
     axins.grid(True)
-    axins.tick_params(labelsize=15)
-    axins.legend(loc='upper right', fontsize=10)
+    axins.tick_params(labelsize=2*mpl.rcParams['xtick.labelsize']//3)
+    axins.legend(loc='upper right', fontsize=2*mpl.rcParams['legend.fontsize']//3)
 
     xlim = max(1e-2, 2*data['xi_range'][0][-1])
     mask = np.abs(qz_grid - Qz_ref[0]) < xlim
@@ -141,7 +147,7 @@ def plot_scaling(data, x_exp=(1,1,1), fit=False, origin=True, right="OZ", c0=0, 
 
     def x_axis_label(exp):
         if exp == 1:
-            return 'T'
+            return '$T$'
         elif exp == 0.5:
             return r'$\sqrt{T}$'
 
@@ -343,6 +349,7 @@ def plot_diagram(data_list, var_list, var_plotlabel, inset_xrange=None, inset_yr
 
     ax[0].set_ylabel(r'$T_N$')
 
+    ax[0].set_title('Phase diagram')
     if subplots == 'commens':
         ax[1].set_ylabel(r'$\overline{q}_z(T_N)/\pi$')
         ax[2].set_ylabel(r'$\mu(T_N)$')
@@ -399,13 +406,13 @@ def plot_diagram(data_list, var_list, var_plotlabel, inset_xrange=None, inset_yr
             y1 = data['b']
             y2 = np.abs(data['aOZ'] * np.maximum(Tc, 0.)**data['bOZ'] + data['cOZ'])
 
-        label = rf"${var_plotlabel}={var_list[i]}$"
-
+        is_commens = np.isclose(data['Qc'][:, -1], 1.)
         color = color_list[c0+i]
+        facecolors = [color if c else 'white' for c in is_commens]
+        
+        label = rf"${var_plotlabel}={var_list[i]:.3f}$"
 
         if subplots == 'commens':
-            is_commens = np.isclose(y1, 1.)
-            facecolors = [color if c else 'white' for c in is_commens]
 
             ax[0].plot(n_list, Tc, '-', color=color)
             ax[0].scatter(n_list, Tc, s=4**2, facecolors=facecolors,
@@ -419,17 +426,16 @@ def plot_diagram(data_list, var_list, var_plotlabel, inset_xrange=None, inset_yr
             ax[2].scatter(n_list, y2, s=4**2, facecolors=facecolors,
                           edgecolors=color, linewidths=1.2, zorder=3)
 
-            for axins in axins_list:
-                axins.plot(n_list, Tc, '-', color=color)
-                axins.scatter(n_list, Tc, s=4**2, facecolors=facecolors,
-                              edgecolors=color, linewidths=1.2, zorder=3)
         else:
             ax[0].plot(n_list, Tc, 'o-', label=label, markersize=4, color=color)
             ax[1].plot(n_list, y1, 'o-', markersize=4, color=color)
             ax[2].plot(n_list, y2, 'o-', markersize=4, color=color)
 
-            for axins in axins_list:
-                axins.plot(n_list, Tc, 'o-', markersize=4, color=color)
+        for axins in axins_list:
+            axins.plot(n_list, Tc, '-', color=color)
+            axins.scatter(n_list, Tc, s=4**2, facecolors=facecolors,
+                            edgecolors=color, linewidths=1.2, zorder=3)
+            axins.tick_params(labelsize=2*mpl.rcParams['xtick.labelsize']//3)
 
         nc = np.interp(0., Tc, n_list)
         #for a in ax:
@@ -452,7 +458,7 @@ def plot_diagram(data_list, var_list, var_plotlabel, inset_xrange=None, inset_yr
             legend_handles.append(
                 Line2D([0], [0], marker='o', linestyle='-', markersize=4,
                        color=c, markerfacecolor=c, markeredgecolor=c,
-                       label=rf"${var_plotlabel}={var_list[i]}$")
+                       label=rf"${var_plotlabel}={var_list[i]:.3g}$")
             )
         ax[0].legend(handles=legend_handles, loc='lower left')
     else:

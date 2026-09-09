@@ -6,13 +6,14 @@ from scripts.lattice import LATTICE, share_bz
 from scripts.utils import merge_results
 from h5 import HDFArchive
 import time, resource
+import os
 
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
 size = comm.Get_size()
 
 v = 0.25
-tp = 0.1
+tp = 0.
 lat = LATTICE(tp=tp)
 bz = share_bz(lat, nk=500, comm=comm)
 bz_fine = bz
@@ -20,11 +21,11 @@ bz_fine = bz
 #n_list = np.linspace(0.782, 0.786, 5) # v = 0.1
 #n_list = np.linspace(0.795, 0.801, 5) # v = 0.15
 #n_list = np.linspace(0.809, 0.813, 5) # v = 0.2
-#n_list = np.linspace(0.8225, 0.8265, 5) # v = 0.25
+n_list = np.linspace(0.8225, 0.8265, 5) # v = 0.25
 #n_list = np.linspace(0.853, 0.855, 5) # v = 0.1, tp = 0.1
 #n_list = np.linspace(0.8583, 0.8598, 5) # v = 0.15, tp = 0.1
 #n_list = np.linspace(0.863, 0.865, 5) # v = 0.2, tp = 0.1
-n_list = np.linspace(0.87, 0.8707, 5) # v = 0.25, tp = 0.1
+#n_list = np.linspace(0.87, 0.8707, 5) # v = 0.25, tp = 0.1
 #n_list = np.linspace(0.8368, 0.8378, 5) # v = 0.3
 T_list = np.arange(0.005, 0.02, 0.00075)
 #T_list = np.linspace(0.005, 0.02, 3)
@@ -69,12 +70,22 @@ print(f"rank {rank} finished {len(my_jobs)} jobs in {t1 - t0:.2f} s | peak RAM =
 
 gathered = comm.gather(results_list, root=0)
 
+comm.Barrier()
+
 if rank == 0:
     flattened = [r for sublist in gathered for r in sublist]
     flattened.sort(key=lambda d: d['n'])
     merged = merge_results(flattened)
 
+    out_file = f'data/scaling/{file_name}'
     print(f"writing results to {file_name}")
-    with HDFArchive(f'data/scaling/{file_name}', "w") as ar:
-        for key, value in merged.items():
-            ar[key] = value
+
+    os.makedirs(os.path.dirname(out_file), exist_ok=True)
+
+    try:
+        with HDFArchive(out_file, "w") as ar:
+            for key, value in merged.items():
+                ar[key] = value
+        print("Successfully written and closed HDF5 file.")
+    except Exception as e:
+        print(f"CRITICAL ERROR during HDF5 write/flush: {e}")
