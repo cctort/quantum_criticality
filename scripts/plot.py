@@ -347,15 +347,15 @@ def plot_diagram(data_list, var_list, var_plotlabel, inset_xrange=None, inset_yr
         a.set_xlim(data_list[0]['n'][0], data_list[0]['n'][-1])
         a.invert_xaxis()
 
-    ax[0].set_ylabel(r'$T_N$')
+    ax[0].set_ylabel(r'$T_c$')
 
     ax[0].set_title('Phase diagram')
     if subplots == 'commens':
-        ax[1].set_ylabel(r'$\overline{q}_z(T_N)/\pi$')
-        ax[2].set_ylabel(r'$\mu(T_N)$')
+        ax[1].set_ylabel(r'$\overline{q}_z(T_c)/\pi$')
+        ax[2].set_ylabel(r'$\mu(T_c)$')
     elif subplots == 'scaling':
         ax[1].set_ylabel(r'$\gamma$')
-        ax[2].set_ylabel(r'$\mathcal{A}(T_N)$')
+        ax[2].set_ylabel(r'$\mathcal{A}(T_c)$')
 
     ax[1].tick_params(axis='x', labelbottom=False)
     ax[0].set_xlabel(r'$n$')
